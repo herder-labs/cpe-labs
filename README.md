@@ -1,5 +1,14 @@
 # cpe-labs
 
+<p align="center">
+  <a href="https://github.com/herder-labs/cpe-labs/releases"><img src="https://img.shields.io/github/v/release/herder-labs/cpe-labs?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
+  <a href="https://hub.docker.com/r/herderlabs/cpe-sim"><img src="https://img.shields.io/docker/v/herderlabs/cpe-sim?label=Docker&logo=docker&logoColor=white&color=2496ED&style=for-the-badge&sort=semver" alt="Docker image"></a>
+  <a href="https://github.com/herder-labs/cpe-labs/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=for-the-badge" alt="Apache-2.0 License"></a>
+  <a href="https://cpe-labs.herder-labs.io/"><img src="https://img.shields.io/badge/Docs-cpe--labs.herder--labs.io-green?style=for-the-badge" alt="Documentation"></a>
+</p>
+
+> **Documentation: https://cpe-labs.herder-labs.io/**
+
 A high-performance CPE simulator for **TR-069 (CWMP)** and **TR-369 (USP)**. One container simulates many CPEs concurrently, driven by operator-supplied vendor profiles in YAML.
 
 The simulator is faithful to the BBF standards on the wire. It does not model the underlying operating system: if it shows up in an Inform, a `GetParameterValues` response, a USP Notify, or a connection-request callback, it belongs here.
@@ -14,7 +23,7 @@ docker run --rm herderlabs/cpe-sim \
 
 That sends one bootstrap Inform and exits when the ACS closes the session. The image bundles the reference profiles at `/profiles/`.
 
-For daemon mode (periodic Informs + connection-request listener), multi-CPE fleets, generators, compose, CI integration, USP MTPs (MQTT / WebSocket / STOMP), and the full vendor-profile reference, see the [docs site](https://herder-labs.github.io/cpe-labs/).
+For daemon mode (periodic Informs + connection-request listener), multi-CPE fleets, generators, compose, CI integration, USP MTPs (MQTT / WebSocket / STOMP), and the full vendor-profile reference, see the [documentation](https://cpe-labs.herder-labs.io/).
 
 ## What it does
 
@@ -37,7 +46,7 @@ For daemon mode (periodic Informs + connection-request listener), multi-CPE flee
 3. Optional YAML config file (`--config /path/to/config.yaml` or `CPE_SIM_CONFIG=/path/...`)
 4. Compiled defaults
 
-Unknown YAML keys, unknown `CPE_SIM_*` env vars, and unknown flags all return errors. Run `docker run --rm herderlabs/cpe-sim --help` for the full flag list, or see the [CLI reference](https://herder-labs.github.io/cpe-labs/reference/cli/).
+Unknown YAML keys, unknown `CPE_SIM_*` env vars, and unknown flags all return errors. Run `docker run --rm herderlabs/cpe-sim --help` for the full flag list, or see the [CLI reference](https://cpe-labs.herder-labs.io/reference/cli/).
 
 ## Contributing
 
