@@ -1,0 +1,86 @@
+# Extenders. TR-098 has no EasyMesh equivalent, so we model mesh
+# nodes as vendor-extension paths under InternetGatewayDevice. Two
+# extenders, each with their own associated stations. The ACS will
+# render these as vendor-quirky entries; topology graphs that
+# understand the X_GENERIC_* prefix will show gateway -> extender ->
+# extender-attached station.
+
+objects:
+  - path: InternetGatewayDevice.X_GENERIC_Extender
+    instances: 2
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Status
+        value: "Connected"
+        writable: true
+        generator:
+          type: enum
+          interval: 5m
+          values: [Connected, Connected, Connected, Connected, Disconnected]
+      - path: MACAddress
+        value: "0E:E0:{cpe:HEX:4}:0{i}:00"
+      - path: ModelName
+        value: "GE-100"
+      - path: SerialNumber
+        value: "EXT-{cpe:04}-0{i}"
+      - path: SoftwareVersion
+        value: "1.0.0"
+      - path: BackhaulSignalStrength
+        type: xsd:int
+        value: "-65"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -82
+          max: -55
+          stepMax: 3
+      - path: TotalAssociations
+        type: xsd:unsignedInt
+        value: "2"
+
+  - path: InternetGatewayDevice.X_GENERIC_Extender.1.AssociatedDevice
+    instances: 2
+    parameters:
+      - path: AssociatedDeviceMACAddress
+        value: "0E:F1:{cpe:HEX:4}:11:0{i}"
+      - path: AssociatedDeviceIPAddress
+        value: "192.168.{cpe}.1{i}0"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-65"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -82
+          max: -55
+          stepMax: 3
+      - path: LastSeen
+        type: xsd:dateTime
+        value: "2026-01-01T00:00:00Z"
+        writable: true
+        generator:
+          type: wallclock
+          interval: 1m
+
+  - path: InternetGatewayDevice.X_GENERIC_Extender.2.AssociatedDevice
+    instances: 1
+    parameters:
+      - path: AssociatedDeviceMACAddress
+        value: "0E:F2:{cpe:HEX:4}:21:0{i}"
+      - path: AssociatedDeviceIPAddress
+        value: "192.168.{cpe}.2{i}0"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-72"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -85
+          max: -60
+          stepMax: 3

@@ -1,0 +1,32 @@
+groups:
+  - prefix: InternetGatewayDevice.ManagementServer
+    parameters:
+      - path: URL
+        value: ""
+        writable: true
+      - path: Username
+        value: ""
+        writable: true
+      - path: Password
+        value: ""
+        writable: true
+      - path: PeriodicInformEnable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: PeriodicInformInterval
+        type: xsd:unsignedInt
+        value: "300"
+        writable: true
+      - path: ConnectionRequestURL
+        value: ""
+        writable: true
+      - path: ConnectionRequestUsername
+        value: "cpe-cr"
+        writable: true
+      - path: ConnectionRequestPassword
+        value: "cpe-cr-pass"
+        writable: true
+      - path: ParameterKey
+        value: ""
+        writable: true

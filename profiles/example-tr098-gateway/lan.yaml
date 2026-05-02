@@ -1,0 +1,36 @@
+# LAN side: LANDevice.1 with DHCP server config.
+
+groups:
+  - prefix: InternetGatewayDevice.LANDevice.1.LANHostConfigManagement
+    parameters:
+      - path: DHCPServerEnable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: MinAddress
+        value: "192.168.{cpe}.100"
+        writable: true
+      - path: MaxAddress
+        value: "192.168.{cpe}.200"
+        writable: true
+      - path: SubnetMask
+        value: "255.255.255.0"
+      - path: DHCPLeaseTime
+        type: xsd:int
+        value: "86400"
+        writable: true
+      - path: IPRouters
+        value: "192.168.{cpe}.1"
+
+  - prefix: InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Status
+        value: "Up"
+      - path: MACAddress
+        value: "00:11:22:{cpe:MAC:3}"
+      - path: MaxBitRate
+        value: "Auto"

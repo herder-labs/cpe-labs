@@ -1,0 +1,46 @@
+groups:
+  - prefix: Device.DeviceInfo
+    parameters:
+      - path: Manufacturer
+        value: "Generic Networks"
+      - path: ManufacturerOUI
+        value: "AABBCC"
+      - path: ProductClass
+        value: "GenericGateway"
+      - path: SerialNumber
+        value: "GATEWAY-0000"
+      - path: ModelName
+        value: "GG-1000"
+      - path: HardwareVersion
+        value: "1.0"
+      - path: SoftwareVersion
+        value: "1.0.0"
+      - path: ProvisioningCode
+        value: ""
+        writable: true
+      - path: UpTime
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: uptime
+          interval: 1s
+      - path: DeviceLog
+        value: ""
+
+  - prefix: Device.DeviceInfo.MemoryStatus
+    parameters:
+      - path: Total
+        type: xsd:unsignedInt
+        value: "524288"
+      - path: Free
+        type: xsd:unsignedInt
+        value: "262144"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 180000
+          max: 300000
+          step: 1000
+          jitter: 0.5

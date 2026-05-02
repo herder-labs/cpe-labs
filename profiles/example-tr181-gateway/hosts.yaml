@@ -1,0 +1,42 @@
+# LAN host table: 6 entries representing wired and wireless clients
+# the gateway sees on its DHCPv4 server. Layer-2 connection is
+# annotated so the ACS can correlate hosts with WiFi associations
+# (where applicable) for the topology graph.
+
+groups:
+  - prefix: Device.Hosts
+    parameters:
+      - path: HostNumberOfEntries
+        type: xsd:unsignedInt
+        value: "6"
+
+objects:
+  - path: Device.Hosts.Host
+    instances: 6
+    parameters:
+      - path: PhysAddress
+        value: "0E:H{i}:{cpe:HEX:4}:0{i}:0{i}"
+      - path: IPAddress
+        value: "192.168.{cpe}.{i}0"
+      - path: AddressSource
+        value: "DHCP"
+      - path: HostName
+        value: "host-{cpe:04}-{i}"
+      - path: Active
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: LeaseTimeRemaining
+        type: xsd:int
+        value: "86400"
+        writable: true
+        generator:
+          type: drift
+          interval: 1m
+          min: 60000
+          max: 86400
+          stepMax: 60
+      - path: Layer1Interface
+        value: "Device.Ethernet.Interface.1"
+      - path: Layer3Interface
+        value: "Device.IP.Interface.2"

@@ -1,0 +1,54 @@
+# Generic TR-098 gateway profile (InternetGatewayDevice.* shape).
+#
+# Synthetic shape for an integrated home gateway. Same topology
+# coverage as the TR-181 sibling (WAN, LAN, WiFi with multiple SSIDs,
+# associated stations, mesh extenders via vendor-extension paths,
+# LAN host table) but on the older TR-098 data model.
+#
+# Vendor identifiers entirely synthetic (OUI 001122, ProductClass
+# GenericIGD).
+
+deviceIdPaths:
+  manufacturer: InternetGatewayDevice.DeviceInfo.Manufacturer
+  oui:          InternetGatewayDevice.DeviceInfo.ManufacturerOUI
+  productClass: InternetGatewayDevice.DeviceInfo.ProductClass
+  serialNumber: InternetGatewayDevice.DeviceInfo.SerialNumber
+
+periodicInformPaths:
+  interval: InternetGatewayDevice.ManagementServer.PeriodicInformInterval
+  enable:   InternetGatewayDevice.ManagementServer.PeriodicInformEnable
+
+connectionRequest:
+  scheme: digest
+  realm: cpe-labs
+  throttleWindow: 5s
+  usernameParameter: InternetGatewayDevice.ManagementServer.ConnectionRequestUsername
+  passwordParameter: InternetGatewayDevice.ManagementServer.ConnectionRequestPassword
+
+eventSchedule:
+  rebootDelay: 30s
+  factoryResetDelay: 45s
+
+fleet:
+  count: 1
+  serialPattern: "IGD-{i:04}"
+  pools:
+    wan_ipv4:
+      type: ipv4
+      cidr: "203.0.113.0/24"
+
+informParameters:
+  bootstrap:
+    - InternetGatewayDevice.DeviceInfo.SoftwareVersion
+    - InternetGatewayDevice.DeviceInfo.HardwareVersion
+    - InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress
+    - InternetGatewayDevice.ManagementServer.ConnectionRequestURL
+  boot:
+    - InternetGatewayDevice.DeviceInfo.UpTime
+  periodic:
+    - InternetGatewayDevice.DeviceInfo.UpTime
+    - InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Stats.EthernetBytesSent
+    - InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Stats.EthernetBytesReceived
+    - InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.TotalAssociations
+  connectionRequest:
+    - InternetGatewayDevice.DeviceInfo.UpTime
