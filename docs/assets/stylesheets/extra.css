@@ -261,6 +261,18 @@ article .typography h4:hover a.headerlink {
   margin-top: 1.4rem;
 }
 
+@media (max-width: 640px) {
+  .cpelabs-actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+  .cpelabs-actions .cpelabs-btn {
+    justify-content: center;
+    width: 100%;
+  }
+}
+
 .cpelabs-btn {
   display: inline-flex;
   align-items: center;

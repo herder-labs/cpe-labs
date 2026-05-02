@@ -1,6 +1,6 @@
 site_name: cpe-labs
 site_description: TR-069 / TR-369 CPE simulator. Real wire-format, profile-driven, multi-CPE per process.
-site_url: https://herder-labs.github.io/cpe-labs/
+site_url: https://cpe-labs.herder-labs.io/
 copyright: Copyright &copy; ISPX
 
 theme:
