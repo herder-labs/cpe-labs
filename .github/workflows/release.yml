@@ -28,17 +28,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create release if missing
+      - name: Ensure release exists and is published
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            echo "Release ${RELEASE_TAG} already exists."
-            exit 0
-          fi
           PRERELEASE_FLAG=""
           if [[ "${IS_PRERELEASE}" == "true" ]]; then
             PRERELEASE_FLAG="--prerelease"
+          fi
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} exists; publishing if it is a draft."
+            gh release edit "${RELEASE_TAG}" --draft=false ${PRERELEASE_FLAG}
+            exit 0
           fi
           gh release create "${RELEASE_TAG}" \
             --title "${RELEASE_TAG}" \
