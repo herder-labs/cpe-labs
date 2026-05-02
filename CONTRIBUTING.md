@@ -1,6 +1,6 @@
 # Contributing to cpe-labs
 
-Thanks for considering a contribution. This repo is the simulator code; the spec workflow lives in [`herder-labs/cpe-labs-context`](https://github.com/herder-labs/cpe-labs-context).
+Thanks for considering a contribution.
 
 ## How to contribute
 
@@ -10,7 +10,7 @@ Open a PR directly. Include the bug report or motivation in the description. No 
 
 ### New features or behavior changes
 
-File an issue first so the design can be discussed. For non-trivial work, the project uses a spec-driven workflow tracked in the [`cpe-labs-context`](https://github.com/herder-labs/cpe-labs-context) repository. Most contributors don't need to engage with that workflow; maintainers will run it on your behalf if a spec is needed.
+File an issue first so the design can be discussed.
 
 ### Documentation
 
@@ -40,7 +40,15 @@ mkdocs serve
 
 ### Architecture anchors
 
-Read [CLAUDE.md](CLAUDE.md). The seven anchors are load-bearing: violating them breaks the simulator's extensibility model and its scale promise. Reviewers cite them by number.
+Seven load-bearing constraints. Reviewers cite them by number; violating them breaks the simulator's extensibility model and its scale promise:
+
+1. **Simulate the management plane, not the OS.** If a feature is observable only via SSH or a serial console, it does not belong here.
+2. **Protocol-agnostic core, transports are adapters.** TR-069 and TR-369 read from / write to one in-memory parameter tree. Adding a new transport must not require touching the tree, the behavior engine, or the profile loader.
+3. **Behavior is config, not code.** Operators describe vendor quirks and runtime behavior in YAML. No `switch` on vendor names, no hardcoded TR-181 vs TR-098 branches in core, no embedded data models.
+4. **Vendor extensibility is the product.** A new vendor / model / firmware lands as a profile, not a Go PR.
+5. **One process, many CPEs.** Per-CPE state lives in plain structs. Transport sessions multiplex over shared clients. Anything that scales linearly in goroutines or file descriptors per CPE needs justification.
+6. **Determinism is opt-in, randomness is the default.** Real fleets are noisy; behavior reflects that. `--seed` reproduces any scenario byte-for-byte when needed.
+7. **Standards-faithful before vendor-quirky.** Out of the box, BBF-compliant. Vendor quirks (`X_*` extensions, malformed XML, non-standard fault codes) layer on via the profile, not the core encoder/decoder.
 
 The most common rejection reasons:
 

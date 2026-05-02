@@ -3,10 +3,19 @@ name: release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v0.1.1)"
+        required: true
+        type: string
 
 permissions:
-  contents: write   # Upload binaries to the GitHub Release.
-  packages: write   # Push to GHCR (kept available even though primary push is Dockerhub).
+  contents: write
+  packages: write
+
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
 
 jobs:
   binaries:
@@ -34,7 +43,7 @@ jobs:
           GOOS:       ${{ matrix.goos }}
           GOARCH:     ${{ matrix.goarch }}
           CGO_ENABLED: "0"
-          VERSION:    ${{ github.event.release.tag_name }}
+          VERSION:    ${{ env.RELEASE_TAG }}
         run: |
           mkdir -p dist
           BIN_NAME="cpe-sim-${VERSION}-${GOOS}-${GOARCH}${{ matrix.ext }}"
@@ -48,7 +57,6 @@ jobs:
               -X github.com/herder-labs/cpe-labs/internal/version.Date=${DATE}" \
             -o "dist/${BIN_NAME}" \
             ./cmd/cpe-sim
-          # SHA256 sidecar for verification.
           (cd dist && sha256sum "${BIN_NAME}" > "${BIN_NAME}.sha256")
           ls -la dist/
 
@@ -56,7 +64,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+          gh release upload "${{ env.RELEASE_TAG }}" dist/* --clobber
 
   docker:
     name: Build + push Docker image
@@ -78,18 +86,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: herderlabs/cpe-sim
-          # Tag flavors:
-          #   herderlabs/cpe-sim:v0.1.0   (full tag)
-          #   herderlabs/cpe-sim:0.1.0    (sans v)
-          #   herderlabs/cpe-sim:0.1      (minor)
-          #   herderlabs/cpe-sim:0        (major)
-          #   herderlabs/cpe-sim:latest   (only on non-prerelease)
           tags: |
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }}
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
 
       - name: Build and push (amd64 + arm64)
         uses: docker/build-push-action@v6
@@ -100,7 +101,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.event.release.tag_name }}
+            VERSION=${{ env.RELEASE_TAG }}
             COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

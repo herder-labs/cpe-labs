@@ -5,9 +5,8 @@ Run a fake CPE (or fleet of fake CPEs) that talks real TR-069 to your ACS, local
 ## Single CPE, one bootstrap
 
 ```bash
-make build
-bin/cpe-sim \
-    --profile=profiles/example-tr181-gateway/ \
+docker run --rm herderlabs/cpe-sim \
+    --profile=/profiles/example-tr181-gateway/ \
     --acs-url=http://your-acs.local:7547/ \
     --log-level=info
 ```
@@ -19,8 +18,8 @@ The simulator sends one bootstrap Inform, drains any RPCs the ACS pushes back, a
 Profile declares `periodicInformPaths` (the example profile already does), so this runs continuously: bootstrap, then periodic Informs every 300s ± 10% jitter (interval comes from the profile, not a flag).
 
 ```bash
-bin/cpe-sim \
-    --profile=profiles/example-tr181-gateway/ \
+docker run --rm -p 7547:7547 herderlabs/cpe-sim \
+    --profile=/profiles/example-tr181-gateway/ \
     --acs-url=http://your-acs.local:7547/ \
     --cr-bind-addr=0.0.0.0:7547 \
     --cr-publish-path=Device.ManagementServer.ConnectionRequestURL
@@ -142,8 +141,8 @@ Run with `--log-level=debug` to see every SOAP request/response body. The struct
 ```yaml
 # .github/workflows/openacs-smoke.yml (excerpt)
 - run: |
-    bin/cpe-sim \
-      --profile=profiles/example-tr181-gateway/ \
+    docker run --rm --network=host herderlabs/cpe-sim \
+      --profile=/profiles/example-tr181-gateway/ \
       --acs-url=http://localhost:7547/ \
       --log-level=info \
       --seed=1
@@ -211,8 +210,8 @@ Every flag has an env var (`CPE_SIM_*`) and a YAML key. Precedence is **flag > e
 The same binary speaks USP over MQTT, WebSocket, or STOMP. Same profile, same parameter tree, same fleet:
 
 ```bash
-bin/cpe-sim \
-  --profile=profiles/example-tr181-gateway/ \
+docker run --rm herderlabs/cpe-sim \
+  --profile=/profiles/example-tr181-gateway/ \
   --usp-mtp=mqtt \
   --usp-mqtt-addr=broker.example.com:1883
 ```
