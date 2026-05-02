@@ -1,0 +1,240 @@
+# WiFi: 2 radios (2.4 + 5 GHz), 4 SSIDs (one main + one guest per
+# radio), 4 access points each carrying their own AssociatedDevice
+# table. Generators wire RSSI drift, byte counters per radio, and
+# link-state enums.
+
+objects:
+  - path: Device.WiFi.Radio
+    instances: 2
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Status
+        value: "Up"
+      - path: Name
+        value: "radio{i}"
+      - path: OperatingFrequencyBand
+        value: "2.4GHz"
+      - path: Channel
+        type: xsd:unsignedInt
+        value: "6"
+        writable: true
+      - path: AutoChannelEnable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: TransmitPower
+        type: xsd:int
+        value: "100"
+        writable: true
+
+  - path: Device.WiFi.SSID
+    instances: 4
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Status
+        value: "Up"
+      - path: Name
+        value: "ssid{i}"
+      - path: SSID
+        value: "Home-{cpe:HEX:4}-{i}"
+        writable: true
+      - path: BSSID
+        value: "AA:BB:CC:{cpe:MAC:3}:{i}0"
+      - path: LowerLayers
+        value: "Device.WiFi.Radio.1"
+
+  - path: Device.WiFi.AccessPoint
+    instances: 4
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Status
+        value: "Enabled"
+      - path: SSIDReference
+        value: "Device.WiFi.SSID.{i}"
+      - path: AssociatedDeviceNumberOfEntries
+        type: xsd:unsignedInt
+        value: "3"
+
+  - path: Device.WiFi.AccessPoint.1.AssociatedDevice
+    instances: 3
+    parameters:
+      - path: MACAddress
+        value: "0E:A1:{cpe:HEX:4}:01:0{i}"
+      - path: AuthenticationState
+        type: xsd:boolean
+        value: "true"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-55"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -75
+          max: -45
+          stepMax: 3
+      - path: LastDataDownlinkRate
+        type: xsd:unsignedInt
+        value: "144000"
+      - path: LastDataUplinkRate
+        type: xsd:unsignedInt
+        value: "72000"
+
+  - path: Device.WiFi.AccessPoint.2.AssociatedDevice
+    instances: 4
+    parameters:
+      - path: MACAddress
+        value: "0E:A2:{cpe:HEX:4}:02:0{i}"
+      - path: AuthenticationState
+        type: xsd:boolean
+        value: "true"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-58"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -78
+          max: -48
+          stepMax: 3
+      - path: LastDataDownlinkRate
+        type: xsd:unsignedInt
+        value: "433000"
+      - path: LastDataUplinkRate
+        type: xsd:unsignedInt
+        value: "150000"
+
+  - path: Device.WiFi.AccessPoint.3.AssociatedDevice
+    instances: 2
+    parameters:
+      - path: MACAddress
+        value: "0E:A3:{cpe:HEX:4}:03:0{i}"
+      - path: AuthenticationState
+        type: xsd:boolean
+        value: "true"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-63"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -82
+          max: -52
+          stepMax: 3
+
+  - path: Device.WiFi.AccessPoint.4.AssociatedDevice
+    instances: 1
+    parameters:
+      - path: MACAddress
+        value: "0E:A4:{cpe:HEX:4}:04:0{i}"
+      - path: AuthenticationState
+        type: xsd:boolean
+        value: "true"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-67"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -85
+          max: -55
+          stepMax: 3
+
+groups:
+  - prefix: Device.WiFi.Radio.1.Stats
+    parameters:
+      - path: BytesSent
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 8000000
+          jitter: 0.25
+      - path: BytesReceived
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 6000000
+          jitter: 0.25
+
+  - prefix: Device.WiFi.Radio.2.Stats
+    parameters:
+      - path: BytesSent
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 12000000
+          jitter: 0.25
+      - path: BytesReceived
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 9000000
+          jitter: 0.25
+
+  - prefix: Device.WiFi.AccessPoint.1.Security
+    parameters:
+      - path: ModeEnabled
+        value: "WPA2-Personal"
+        writable: true
+      - path: KeyPassphrase
+        value: ""
+        writable: true
+
+  - prefix: Device.WiFi.AccessPoint.2.Security
+    parameters:
+      - path: ModeEnabled
+        value: "WPA2-Personal"
+        writable: true
+      - path: KeyPassphrase
+        value: ""
+        writable: true
+
+  - prefix: Device.WiFi.AccessPoint.3.Security
+    parameters:
+      - path: ModeEnabled
+        value: "WPA2-Personal"
+        writable: true
+      - path: KeyPassphrase
+        value: ""
+        writable: true
+
+  - prefix: Device.WiFi.AccessPoint.4.Security
+    parameters:
+      - path: ModeEnabled
+        value: "WPA2-Personal"
+        writable: true
+      - path: KeyPassphrase
+        value: ""
+        writable: true

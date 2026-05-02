@@ -1,0 +1,67 @@
+# WAN side: WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1
+# (TR-098's typical PPPoE setup). Stats counters generator-driven so
+# the ACS sees moving byte data.
+
+groups:
+  - prefix: InternetGatewayDevice.WANDevice.1
+    parameters:
+      - path: WANAccessType
+        value: "Ethernet"
+
+  - prefix: InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: ConnectionStatus
+        value: "Connected"
+        writable: true
+        generator:
+          type: enum
+          interval: 10m
+          values: [Connected, Connected, Connected, Connected, Connected, PendingDisconnect]
+      - path: ConnectionType
+        value: "IP_Routed"
+      - path: Username
+        value: "subscriber-{cpe:04}@isp.example"
+        writable: true
+      - path: Password
+        value: ""
+        writable: true
+      - path: ExternalIPAddress
+        value: "{wan_ipv4}"
+        writable: true
+      - path: SubnetMask
+        value: "255.255.255.255"
+      - path: MACAddress
+        value: "00:11:22:{cpe:MAC:3}"
+      - path: NATEnabled
+        type: xsd:boolean
+        value: "true"
+        writable: true
+
+  - prefix: InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Stats
+    parameters:
+      - path: EthernetBytesSent
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 11000000
+          jitter: 0.2
+      - path: EthernetBytesReceived
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 17000000
+          jitter: 0.2

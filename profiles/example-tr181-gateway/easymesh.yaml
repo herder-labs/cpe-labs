@@ -1,0 +1,170 @@
+# EasyMesh extenders. TR-181 §Device.WiFi.MultiAP.* models the
+# multi-AP / mesh topology. Two extender nodes (APDevice.1 and
+# APDevice.2), each with two radios and stations associated to each
+# radio's AP. Drives the ACS topology graph: gateway -> extender ->
+# extender-attached station.
+#
+# Object paths cannot themselves contain {i} (the loader appends it
+# automatically), so nested instance dimensions are spelled out with
+# literal indexes.
+
+objects:
+  - path: Device.WiFi.MultiAP.APDevice
+    instances: 2
+    parameters:
+      - path: MACAddress
+        value: "0E:E0:{cpe:HEX:4}:0{i}:00"
+      - path: Manufacturer
+        value: "Generic Networks"
+      - path: ManufacturerOUI
+        value: "AABBCC"
+      - path: ModelName
+        value: "GE-100"
+      - path: SerialNumber
+        value: "EXT-{cpe:04}-0{i}"
+      - path: SoftwareVersion
+        value: "1.0.0"
+      - path: AssociatedDeviceNumberOfEntries
+        type: xsd:unsignedInt
+        value: "2"
+
+  - path: Device.WiFi.MultiAP.APDevice.1.Radio
+    instances: 2
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+      - path: OperatingFrequencyBand
+        value: "2.4GHz"
+      - path: Channel
+        type: xsd:unsignedInt
+        value: "11"
+      - path: TransmitPower
+        type: xsd:int
+        value: "100"
+
+  - path: Device.WiFi.MultiAP.APDevice.2.Radio
+    instances: 2
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+      - path: OperatingFrequencyBand
+        value: "5GHz"
+      - path: Channel
+        type: xsd:unsignedInt
+        value: "36"
+      - path: TransmitPower
+        type: xsd:int
+        value: "100"
+
+  - path: Device.WiFi.MultiAP.APDevice.1.Radio.1.AP
+    instances: 2
+    parameters:
+      - path: BSSID
+        value: "0E:E1:{cpe:HEX:4}:01:0{i}"
+      - path: SSID
+        value: "Home-{cpe:HEX:4}-{i}"
+      - path: AssociatedDeviceNumberOfEntries
+        type: xsd:unsignedInt
+        value: "2"
+
+  - path: Device.WiFi.MultiAP.APDevice.1.Radio.2.AP
+    instances: 2
+    parameters:
+      - path: BSSID
+        value: "0E:E2:{cpe:HEX:4}:01:0{i}"
+      - path: SSID
+        value: "Home-{cpe:HEX:4}-5g-{i}"
+      - path: AssociatedDeviceNumberOfEntries
+        type: xsd:unsignedInt
+        value: "1"
+
+  - path: Device.WiFi.MultiAP.APDevice.2.Radio.1.AP
+    instances: 2
+    parameters:
+      - path: BSSID
+        value: "0E:E3:{cpe:HEX:4}:02:0{i}"
+      - path: SSID
+        value: "Home-{cpe:HEX:4}-{i}"
+      - path: AssociatedDeviceNumberOfEntries
+        type: xsd:unsignedInt
+        value: "1"
+
+  - path: Device.WiFi.MultiAP.APDevice.2.Radio.2.AP
+    instances: 2
+    parameters:
+      - path: BSSID
+        value: "0E:E4:{cpe:HEX:4}:02:0{i}"
+      - path: SSID
+        value: "Home-{cpe:HEX:4}-5g-{i}"
+      - path: AssociatedDeviceNumberOfEntries
+        type: xsd:unsignedInt
+        value: "1"
+
+  # Stations associated to extender-1 radio-1 AP-1 (2 clients).
+  - path: Device.WiFi.MultiAP.APDevice.1.Radio.1.AP.1.AssociatedDevice
+    instances: 2
+    parameters:
+      - path: MACAddress
+        value: "0E:F1:{cpe:HEX:4}:11:0{i}"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-65"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -82
+          max: -55
+          stepMax: 3
+      - path: LastDataDownlinkRate
+        type: xsd:unsignedInt
+        value: "72000"
+      - path: LastConnectTime
+        type: xsd:dateTime
+        value: "2026-01-01T00:00:00Z"
+        writable: true
+        generator:
+          type: wallclock
+          interval: 1m
+
+  # Stations associated to extender-1 radio-2 AP-1 (1 client).
+  - path: Device.WiFi.MultiAP.APDevice.1.Radio.2.AP.1.AssociatedDevice
+    instances: 1
+    parameters:
+      - path: MACAddress
+        value: "0E:F2:{cpe:HEX:4}:12:0{i}"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-60"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -78
+          max: -48
+          stepMax: 3
+      - path: LastDataDownlinkRate
+        type: xsd:unsignedInt
+        value: "433000"
+
+  # Stations associated to extender-2 radio-1 AP-1 (1 client).
+  - path: Device.WiFi.MultiAP.APDevice.2.Radio.1.AP.1.AssociatedDevice
+    instances: 1
+    parameters:
+      - path: MACAddress
+        value: "0E:F3:{cpe:HEX:4}:21:0{i}"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-72"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -85
+          max: -60
+          stepMax: 3
+      - path: LastDataDownlinkRate
+        type: xsd:unsignedInt
+        value: "54000"

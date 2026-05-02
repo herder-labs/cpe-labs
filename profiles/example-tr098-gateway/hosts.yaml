@@ -1,0 +1,37 @@
+# LAN host table.
+
+groups:
+  - prefix: InternetGatewayDevice.LANDevice.1.Hosts
+    parameters:
+      - path: HostNumberOfEntries
+        type: xsd:unsignedInt
+        value: "6"
+
+objects:
+  - path: InternetGatewayDevice.LANDevice.1.Hosts.Host
+    instances: 6
+    parameters:
+      - path: MACAddress
+        value: "0E:H{i}:{cpe:HEX:4}:0{i}:0{i}"
+      - path: IPAddress
+        value: "192.168.{cpe}.{i}0"
+      - path: AddressSource
+        value: "DHCP"
+      - path: HostName
+        value: "host-{cpe:04}-{i}"
+      - path: Active
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: LeaseTimeRemaining
+        type: xsd:int
+        value: "86400"
+        writable: true
+        generator:
+          type: drift
+          interval: 1m
+          min: 60000
+          max: 86400
+          stepMax: 60
+      - path: InterfaceType
+        value: "Ethernet"

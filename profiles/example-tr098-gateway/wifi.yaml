@@ -1,0 +1,111 @@
+# WLAN: TR-098 conflates radio + SSID + AP into WLANConfiguration.
+# Four WLANConfiguration instances (2.4 GHz main + guest, 5 GHz main
+# + guest), each with its own AssociatedDevice table for the connected
+# stations.
+
+objects:
+  - path: InternetGatewayDevice.LANDevice.1.WLANConfiguration
+    instances: 4
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Status
+        value: "Up"
+      - path: SSID
+        value: "Home-{cpe:HEX:4}-{i}"
+        writable: true
+      - path: BSSID
+        value: "00:11:22:{cpe:MAC:3}:{i}0"
+      - path: Channel
+        type: xsd:unsignedInt
+        value: "6"
+        writable: true
+      - path: AutoChannelEnable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Standard
+        value: "n"
+      - path: BeaconType
+        value: "WPA2"
+      - path: TotalAssociations
+        type: xsd:unsignedInt
+        value: "3"
+
+  - path: InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.AssociatedDevice
+    instances: 3
+    parameters:
+      - path: AssociatedDeviceMACAddress
+        value: "0E:A1:{cpe:HEX:4}:01:0{i}"
+      - path: AssociatedDeviceIPAddress
+        value: "192.168.{cpe}.{i}1"
+      - path: AssociatedDeviceAuthenticationState
+        type: xsd:boolean
+        value: "true"
+      - path: LastDataTransmitRate
+        value: "144"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-55"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -75
+          max: -45
+          stepMax: 3
+
+  - path: InternetGatewayDevice.LANDevice.1.WLANConfiguration.2.AssociatedDevice
+    instances: 4
+    parameters:
+      - path: AssociatedDeviceMACAddress
+        value: "0E:A2:{cpe:HEX:4}:02:0{i}"
+      - path: AssociatedDeviceIPAddress
+        value: "192.168.{cpe}.{i}2"
+      - path: AssociatedDeviceAuthenticationState
+        type: xsd:boolean
+        value: "true"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-58"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -78
+          max: -48
+          stepMax: 3
+
+  - path: InternetGatewayDevice.LANDevice.1.WLANConfiguration.3.AssociatedDevice
+    instances: 2
+    parameters:
+      - path: AssociatedDeviceMACAddress
+        value: "0E:A3:{cpe:HEX:4}:03:0{i}"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-63"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -82
+          max: -52
+          stepMax: 3
+
+  - path: InternetGatewayDevice.LANDevice.1.WLANConfiguration.4.AssociatedDevice
+    instances: 1
+    parameters:
+      - path: AssociatedDeviceMACAddress
+        value: "0E:A4:{cpe:HEX:4}:04:0{i}"
+      - path: SignalStrength
+        type: xsd:int
+        value: "-67"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -85
+          max: -55
+          stepMax: 3

@@ -1,0 +1,29 @@
+groups:
+  - prefix: InternetGatewayDevice.DeviceInfo
+    parameters:
+      - path: Manufacturer
+        value: "Generic Networks"
+      - path: ManufacturerOUI
+        value: "001122"
+      - path: ProductClass
+        value: "GenericIGD"
+      - path: SerialNumber
+        value: "IGD-0000"
+      - path: ModelName
+        value: "IGD-2000"
+      - path: HardwareVersion
+        value: "1.0"
+      - path: SoftwareVersion
+        value: "1.0.0"
+      - path: ProvisioningCode
+        value: ""
+        writable: true
+      - path: UpTime
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: uptime
+          interval: 1s
+      - path: DeviceLog
+        value: ""

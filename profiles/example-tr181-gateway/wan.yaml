@@ -1,0 +1,152 @@
+# WAN side: one Ethernet interface bound to one IP interface (the WAN
+# leg of the IP.Interface table; LAN leg is in lan.yaml). One PPP
+# session for PPPoE-style auth. Stats counters are generator-driven
+# so the ACS sees moving byte data.
+
+objects:
+  - path: Device.Ethernet.Interface
+    instances: 1
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Status
+        value: "Up"
+        writable: true
+        generator:
+          type: enum
+          interval: 5m
+          values: [Up, Up, Up, Up, Up, Up, Up, Up, Down]
+      - path: MACAddress
+        value: "AA:BB:CC:{cpe:MAC:3}"
+      - path: MaxBitRate
+        type: xsd:int
+        value: "1000"
+      - path: DuplexMode
+        value: "Full"
+
+  - path: Device.PPP.Interface
+    instances: 1
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Status
+        value: "Up"
+      - path: Username
+        value: "subscriber-{cpe:04}@isp.example"
+        writable: true
+      - path: Password
+        value: ""
+        writable: true
+      - path: ConnectionStatus
+        value: "Connected"
+        writable: true
+        generator:
+          type: enum
+          interval: 10m
+          values: [Connected, Connected, Connected, Connected, Connected, PendingDisconnect]
+
+groups:
+  - prefix: Device.Ethernet.Interface.1.Stats
+    parameters:
+      - path: BytesSent
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 12500000
+          jitter: 0.2
+      - path: BytesReceived
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 18750000
+          jitter: 0.2
+
+  - prefix: Device.IP.Interface.1
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Status
+        value: "Up"
+      - path: Type
+        value: "Normal"
+      - path: Name
+        value: "wan"
+
+  - prefix: Device.IP.Interface.1.IPv4Address.1
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+      - path: Status
+        value: "Enabled"
+      - path: IPAddress
+        value: "{wan_ipv4}"
+        writable: true
+      - path: SubnetMask
+        value: "255.255.255.0"
+        writable: true
+      - path: AddressingType
+        value: "DHCP"
+        writable: true
+
+  - prefix: Device.IP.Interface.1.IPv6Address.1
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+      - path: IPAddress
+        value: "{wan_ipv6}"
+        writable: true
+      - path: Origin
+        value: "AutoConfigured"
+
+  - prefix: Device.IP.Interface.1.IPv6Prefix.1
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+      - path: Prefix
+        value: "{delegated_prefix}"
+      - path: Origin
+        value: "PrefixDelegation"
+
+  - prefix: Device.IP.Interface.1.Stats
+    parameters:
+      - path: BytesSent
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 11000000
+          jitter: 0.2
+      - path: BytesReceived
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 17000000
+          jitter: 0.2

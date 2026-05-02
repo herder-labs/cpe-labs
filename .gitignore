@@ -1,0 +1,22 @@
+# Build output
+/bin/
+*.test
+*.out
+*.exe
+
+# Coverage
+coverage.out
+coverage.html
+
+# Worktrees (per CLAUDE.md)
+.worktrees/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

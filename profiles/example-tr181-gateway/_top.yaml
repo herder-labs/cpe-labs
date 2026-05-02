@@ -1,0 +1,65 @@
+# Generic TR-181 gateway profile.
+#
+# Synthetic device shape for an integrated home gateway with WiFi
+# (2.4 + 5 GHz), EasyMesh extenders, and a fleet of LAN and WiFi
+# clients. Drives a meaningful topology graph in any TR-069 ACS:
+# WAN -> CPE -> WiFi radios -> SSIDs -> stations + extenders ->
+# extender-attached stations.
+#
+# Vendor identifiers are entirely synthetic (OUI AABBCC, ProductClass
+# GenericGateway). No real-vendor data.
+
+deviceIdPaths:
+  manufacturer: Device.DeviceInfo.Manufacturer
+  oui:          Device.DeviceInfo.ManufacturerOUI
+  productClass: Device.DeviceInfo.ProductClass
+  serialNumber: Device.DeviceInfo.SerialNumber
+
+periodicInformPaths:
+  interval: Device.ManagementServer.PeriodicInformInterval
+  enable:   Device.ManagementServer.PeriodicInformEnable
+
+connectionRequest:
+  scheme: digest
+  realm: cpe-labs
+  throttleWindow: 5s
+  usernameParameter: Device.ManagementServer.ConnectionRequestUsername
+  passwordParameter: Device.ManagementServer.ConnectionRequestPassword
+
+eventSchedule:
+  rebootDelay: 30s
+  factoryResetDelay: 45s
+
+fleet:
+  count: 1
+  serialPattern: "GATEWAY-{i:04}"
+  pools:
+    wan_ipv4:
+      type: ipv4
+      cidr: "203.0.113.0/24"
+    wan_ipv6:
+      type: ipv6
+      cidr: "2001:db8:1::/64"
+    delegated_prefix:
+      type: ipv6prefix
+      super: "2001:db8:cafe::/48"
+      sublen: 56
+
+informParameters:
+  bootstrap:
+    - Device.DeviceInfo.SoftwareVersion
+    - Device.DeviceInfo.HardwareVersion
+    - Device.IP.Interface.1.IPv4Address.1.IPAddress
+    - Device.ManagementServer.ConnectionRequestURL
+  boot:
+    - Device.DeviceInfo.UpTime
+  periodic:
+    - Device.DeviceInfo.UpTime
+    - Device.IP.Interface.1.Stats.BytesSent
+    - Device.IP.Interface.1.Stats.BytesReceived
+    - Device.WiFi.Radio.1.Stats.BytesSent
+    - Device.WiFi.Radio.2.Stats.BytesSent
+    - Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries
+    - Device.WiFi.AccessPoint.3.AssociatedDeviceNumberOfEntries
+  connectionRequest:
+    - Device.DeviceInfo.UpTime

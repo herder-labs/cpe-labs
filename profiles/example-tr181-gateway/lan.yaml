@@ -1,0 +1,54 @@
+# LAN side: bridge IP interface (IP.Interface.2) for the local
+# subnet, plus a DHCPv4 server description so the ACS sees the lease
+# pool the gateway hands out.
+
+groups:
+  - prefix: Device.IP.Interface.2
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Status
+        value: "Up"
+      - path: Type
+        value: "Normal"
+      - path: Name
+        value: "br-lan"
+
+  - prefix: Device.IP.Interface.2.IPv4Address.1
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+      - path: Status
+        value: "Enabled"
+      - path: IPAddress
+        value: "192.168.{cpe}.1"
+        writable: true
+      - path: SubnetMask
+        value: "255.255.255.0"
+      - path: AddressingType
+        value: "Static"
+
+  - prefix: Device.DHCPv4.Server.Pool.1
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Interface
+        value: "Device.IP.Interface.2"
+        writable: true
+      - path: MinAddress
+        value: "192.168.{cpe}.100"
+        writable: true
+      - path: MaxAddress
+        value: "192.168.{cpe}.200"
+        writable: true
+      - path: SubnetMask
+        value: "255.255.255.0"
+      - path: LeaseTime
+        type: xsd:int
+        value: "86400"
+        writable: true
