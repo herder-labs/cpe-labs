@@ -1,12 +1,13 @@
 name: release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build (e.g. v0.1.1)"
+        description: "Existing tag to build (e.g. v0.1.1 or v0.1.2-alpha.1)"
         required: true
         type: string
 
@@ -15,11 +16,38 @@ permissions:
   packages: write
 
 env:
-  RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  IS_PRERELEASE: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
 
 jobs:
+  release:
+    name: Ensure GitHub Release exists
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create release if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists."
+            exit 0
+          fi
+          PRERELEASE_FLAG=""
+          if [[ "${IS_PRERELEASE}" == "true" ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          gh release create "${RELEASE_TAG}" \
+            --title "${RELEASE_TAG}" \
+            --generate-notes \
+            ${PRERELEASE_FLAG}
+
   binaries:
     name: Build binaries (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: release
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -68,6 +96,7 @@ jobs:
 
   docker:
     name: Build + push Docker image
+    needs: release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -88,9 +117,7 @@ jobs:
           images: herderlabs/cpe-sim
           tags: |
             type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
-            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }}
-            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+            type=raw,value=latest,enable=${{ env.IS_PRERELEASE != 'true' }}
 
       - name: Build and push (amd64 + arm64)
         uses: docker/build-push-action@v6
