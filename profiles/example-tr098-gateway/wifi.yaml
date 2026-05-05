@@ -2,6 +2,10 @@
 # Four WLANConfiguration instances (2.4 GHz main + guest, 5 GHz main
 # + guest), each with its own AssociatedDevice table for the connected
 # stations.
+#
+# Every AssociatedDevice table exposes the same leaf set so an ACS
+# issuing wildcard GPVs (e.g. WLANConfiguration.*.AssociatedDevice.*.SignalStrength)
+# never hits a per-WLAN schema gap that would 9005 the entire batch.
 
 objects:
   - path: InternetGatewayDevice.LANDevice.1.WLANConfiguration
@@ -30,7 +34,27 @@ objects:
         value: "n"
       - path: BeaconType
         value: "WPA2"
+      - path: BasicAuthenticationMode
+        value: "None"
+        writable: true
+      - path: WPAEncryptionModes
+        value: "AESEncryption"
+        writable: true
+      - path: IEEE11iEncryptionModes
+        value: "AESEncryption"
+        writable: true
+      - path: SSIDAdvertisementEnabled
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: TransmitPower
+        type: xsd:int
+        value: "100"
+        writable: true
       - path: TotalAssociations
+        type: xsd:unsignedInt
+        value: "3"
+      - path: AssociatedDeviceNumberOfEntries
         type: xsd:unsignedInt
         value: "3"
 
@@ -67,6 +91,8 @@ objects:
       - path: AssociatedDeviceAuthenticationState
         type: xsd:boolean
         value: "true"
+      - path: LastDataTransmitRate
+        value: "300"
       - path: SignalStrength
         type: xsd:int
         value: "-58"
@@ -83,6 +109,13 @@ objects:
     parameters:
       - path: AssociatedDeviceMACAddress
         value: "0E:A3:{cpe:HEX:4}:03:0{i}"
+      - path: AssociatedDeviceIPAddress
+        value: "192.168.{cpe}.{i}3"
+      - path: AssociatedDeviceAuthenticationState
+        type: xsd:boolean
+        value: "true"
+      - path: LastDataTransmitRate
+        value: "144"
       - path: SignalStrength
         type: xsd:int
         value: "-63"
@@ -99,6 +132,13 @@ objects:
     parameters:
       - path: AssociatedDeviceMACAddress
         value: "0E:A4:{cpe:HEX:4}:04:0{i}"
+      - path: AssociatedDeviceIPAddress
+        value: "192.168.{cpe}.{i}4"
+      - path: AssociatedDeviceAuthenticationState
+        type: xsd:boolean
+        value: "true"
+      - path: LastDataTransmitRate
+        value: "433"
       - path: SignalStrength
         type: xsd:int
         value: "-67"
@@ -109,3 +149,104 @@ objects:
           min: -85
           max: -55
           stepMax: 3
+
+groups:
+  - prefix: InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Stats
+    parameters:
+      - path: BytesSent
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 4000000
+          jitter: 0.3
+      - path: BytesReceived
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 3000000
+          jitter: 0.3
+
+  - prefix: InternetGatewayDevice.LANDevice.1.WLANConfiguration.2.Stats
+    parameters:
+      - path: BytesSent
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 1500000
+          jitter: 0.3
+      - path: BytesReceived
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 1200000
+          jitter: 0.3
+
+  - prefix: InternetGatewayDevice.LANDevice.1.WLANConfiguration.3.Stats
+    parameters:
+      - path: BytesSent
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 6000000
+          jitter: 0.3
+      - path: BytesReceived
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 4500000
+          jitter: 0.3
+
+  - prefix: InternetGatewayDevice.LANDevice.1.WLANConfiguration.4.Stats
+    parameters:
+      - path: BytesSent
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 2000000
+          jitter: 0.3
+      - path: BytesReceived
+        type: xsd:unsignedInt
+        value: "0"
+        writable: true
+        generator:
+          type: counter
+          interval: 30s
+          min: 0
+          max: 4294967295
+          step: 1700000
+          jitter: 0.3
