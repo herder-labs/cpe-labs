@@ -44,8 +44,12 @@ objects:
       - path: SSID
         value: "Home-{cpe:HEX:4}-{i}"
         writable: true
+      # BSSID is a TR-181 MACAddress (6-byte / 48-bit). Use 2 bytes from
+      # the cpe instance + 1 byte from the SSID instance so each cpe gets
+      # a distinct, valid MAC per VAP. See tr-181-2-20-1.xml line 21842
+      # (Device.WiFi.SSID.{i}.BSSID, dataType ref="MACAddress").
       - path: BSSID
-        value: "AA:BB:CC:{cpe:MAC:3}:{i}0"
+        value: "AA:BB:CC:{cpe:MAC:2}:0{i}"
       - path: LowerLayers
         value: "Device.WiFi.Radio.1"
 
@@ -67,8 +71,13 @@ objects:
   - path: Device.WiFi.AccessPoint.1.AssociatedDevice
     instances: 3
     parameters:
+      # AssociatedDevice.{i}.MACAddress is the client station MAC,
+      # typed MACAddress (6-byte). Layout: 0E:A1 (vendor prefix, 2B) +
+      # cpe instance (2B via {cpe:MAC:2}) + AP index (1B) + STA index
+      # (1B). Total 6B / 12 hex chars / 5 colons. See
+      # tr-181-2-20-1.xml line 21942 (AccessPoint.{i}.AssociatedDevice.{i}.MACAddress).
       - path: MACAddress
-        value: "0E:A1:{cpe:HEX:4}:01:0{i}"
+        value: "0E:A1:{cpe:MAC:2}:01:0{i}"
       - path: AuthenticationState
         type: xsd:boolean
         value: "true"
@@ -93,7 +102,7 @@ objects:
     instances: 4
     parameters:
       - path: MACAddress
-        value: "0E:A2:{cpe:HEX:4}:02:0{i}"
+        value: "0E:A2:{cpe:MAC:2}:02:0{i}"
       - path: AuthenticationState
         type: xsd:boolean
         value: "true"
@@ -118,7 +127,7 @@ objects:
     instances: 2
     parameters:
       - path: MACAddress
-        value: "0E:A3:{cpe:HEX:4}:03:0{i}"
+        value: "0E:A3:{cpe:MAC:2}:03:0{i}"
       - path: AuthenticationState
         type: xsd:boolean
         value: "true"
@@ -137,7 +146,7 @@ objects:
     instances: 1
     parameters:
       - path: MACAddress
-        value: "0E:A4:{cpe:HEX:4}:04:0{i}"
+        value: "0E:A4:{cpe:MAC:2}:04:0{i}"
       - path: AuthenticationState
         type: xsd:boolean
         value: "true"

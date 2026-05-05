@@ -18,6 +18,11 @@ objects:
           type: enum
           interval: 5m
           values: [Up, Up, Up, Up, Up, Up, Up, Up, Down]
+      # Device.Ethernet.Interface.{i}.MACAddress is the burned-in NIC
+      # MAC, NOT the address used for higher-layer protocols. Per
+      # tr-181-2-20-1.xml line 14195: "Note: This is not necessarily
+      # the same as the MAC address used for higher-level protocols,
+      # which is modeled via the #.Link.{i}.MACAddress parameter."
       - path: MACAddress
         value: "AA:BB:CC:{cpe:MAC:3}"
       - path: MaxBitRate
@@ -25,6 +30,31 @@ objects:
         value: "1000"
       - path: DuplexMode
         value: "Full"
+
+  # Device.Ethernet.Link is the higher-layer interface used by IP
+  # bindings (line 14516+ in tr-181-2-20-1.xml). Its MACAddress is
+  # what other devices on the LAN see as "this gateway's MAC", which
+  # is what topology-resolution scripts should prefer over the burned-
+  # in NIC MAC. See easymesh-default.ts gateway-MAC priority chain.
+  - path: Device.Ethernet.Link
+    instances: 1
+    parameters:
+      - path: Enable
+        type: xsd:boolean
+        value: "true"
+        writable: true
+      - path: Status
+        value: "Up"
+      - path: Name
+        value: "eth-link-1"
+      - path: LowerLayers
+        value: "Device.Ethernet.Interface.1"
+      - path: MACAddress
+        # Same value as the burned-in NIC for the simulator (typical
+        # for residential gateways without locally-administered MACs).
+        # Kept identical so scripts that read either path resolve to
+        # the same gateway identity.
+        value: "AA:BB:CC:{cpe:MAC:3}"
 
   - path: Device.PPP.Interface
     instances: 1
