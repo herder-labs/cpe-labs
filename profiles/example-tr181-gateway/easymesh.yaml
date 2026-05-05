@@ -1,19 +1,30 @@
-# EasyMesh extenders. TR-181 §Device.WiFi.MultiAP.* models the
-# multi-AP / mesh topology. Two extender nodes (APDevice.1 and
-# APDevice.2), each with two radios and stations associated to each
-# radio's AP. Drives the ACS topology graph: gateway -> extender ->
-# extender-attached station.
+# EasyMesh extenders, legacy `Device.WiFi.MultiAP.*` subtree. This
+# tree is `status="deleted"` in TR-181 issue 2 amendment 13+ — the
+# canonical EasyMesh data model has been moved to
+# `Device.WiFi.DataElements.Network.*` (see tr-181-2-20-1.xml line
+# 21762+ for the new tree, line 21157 for the deletion marker on
+# MultiAP). Production devices in the field still emit the legacy
+# tree during the migration window, so the simulator keeps it as a
+# representative shape, but new ACS-side scripts MUST consume
+# DataElements.* and treat MultiAP.* as a fallback only.
 #
 # Object paths cannot themselves contain {i} (the loader appends it
 # automatically), so nested instance dimensions are spelled out with
 # literal indexes.
+#
+# All MACAddress / BSSID values must be valid 6-byte (12-hex-char)
+# MACs per TR-181's `dataType ref="MACAddress"` typing. Earlier
+# versions of this file used `{cpe:HEX:4}` (4 hex chars without
+# colons) inside MAC strings, producing invalid 5-field MACs like
+# "0E:E0:0001:01:00" — fixed below by switching to `{cpe:MAC:2}`
+# (2-byte colon-separated fragment).
 
 objects:
   - path: Device.WiFi.MultiAP.APDevice
     instances: 2
     parameters:
       - path: MACAddress
-        value: "0E:E0:{cpe:HEX:4}:0{i}:00"
+        value: "0E:E0:{cpe:MAC:2}:0{i}:00"
       - path: Manufacturer
         value: "Generic Networks"
       - path: ManufacturerOUI
@@ -62,7 +73,7 @@ objects:
     instances: 2
     parameters:
       - path: BSSID
-        value: "0E:E1:{cpe:HEX:4}:01:0{i}"
+        value: "0E:E1:{cpe:MAC:2}:01:0{i}"
       - path: SSID
         value: "Home-{cpe:HEX:4}-{i}"
       - path: AssociatedDeviceNumberOfEntries
@@ -73,7 +84,7 @@ objects:
     instances: 2
     parameters:
       - path: BSSID
-        value: "0E:E2:{cpe:HEX:4}:01:0{i}"
+        value: "0E:E2:{cpe:MAC:2}:01:0{i}"
       - path: SSID
         value: "Home-{cpe:HEX:4}-5g-{i}"
       - path: AssociatedDeviceNumberOfEntries
@@ -84,7 +95,7 @@ objects:
     instances: 2
     parameters:
       - path: BSSID
-        value: "0E:E3:{cpe:HEX:4}:02:0{i}"
+        value: "0E:E3:{cpe:MAC:2}:02:0{i}"
       - path: SSID
         value: "Home-{cpe:HEX:4}-{i}"
       - path: AssociatedDeviceNumberOfEntries
@@ -95,7 +106,7 @@ objects:
     instances: 2
     parameters:
       - path: BSSID
-        value: "0E:E4:{cpe:HEX:4}:02:0{i}"
+        value: "0E:E4:{cpe:MAC:2}:02:0{i}"
       - path: SSID
         value: "Home-{cpe:HEX:4}-5g-{i}"
       - path: AssociatedDeviceNumberOfEntries
@@ -107,7 +118,7 @@ objects:
     instances: 2
     parameters:
       - path: MACAddress
-        value: "0E:F1:{cpe:HEX:4}:11:0{i}"
+        value: "0E:F1:{cpe:MAC:2}:11:0{i}"
       - path: SignalStrength
         type: xsd:int
         value: "-65"
@@ -134,7 +145,7 @@ objects:
     instances: 1
     parameters:
       - path: MACAddress
-        value: "0E:F2:{cpe:HEX:4}:12:0{i}"
+        value: "0E:F2:{cpe:MAC:2}:12:0{i}"
       - path: SignalStrength
         type: xsd:int
         value: "-60"
@@ -154,7 +165,7 @@ objects:
     instances: 1
     parameters:
       - path: MACAddress
-        value: "0E:F3:{cpe:HEX:4}:21:0{i}"
+        value: "0E:F3:{cpe:MAC:2}:21:0{i}"
       - path: SignalStrength
         type: xsd:int
         value: "-72"

@@ -1,0 +1,70 @@
+# TR-181 2.13+ canonical EasyMesh data model.
+#
+# `Device.WiFi.DataElements.Network.*` is the standards-track home for
+# Wi-Fi Alliance EasyMesh state, replacing the now-deleted
+# `Device.WiFi.MultiAP.*` subtree (see easymesh.yaml). Reference:
+# tr-181-2-20-1.xml line 21762 — `Device.WiFi.DataElements.Network`.
+#
+# Topology-relevant fields exposed here:
+#   - `.Network.ID` (string, line 21767)
+#       Unique identifier for the Wi-Fi network as a whole.
+#   - `.Network.ControllerID` (string, line 21779)
+#       "A unique identifier for a Multi-AP controller. It is
+#       recommended that this be the same as the IEEE 1905 ALID of
+#       the EasyMesh controller." This is the canonical gateway MAC
+#       for ACS-side topology resolution.
+#   - `.Network.Device.{i}.ID` (MACAddress, line 22129)
+#       The agent / single-AP device's IEEE 1905 AL MAC. Each agent
+#       gets one entry; index 1 is the controller-co-located agent
+#       on a typical residential gateway.
+#   - `.Network.ColocatedAgentID` (MACAddress, line 21805) — when the
+#       controller is co-located with an agent (the residential
+#       gateway case), this is its agent ID. Same value as Device.1.ID.
+#
+# The simulator emits a 1-device network here (the gateway itself);
+# extender shapes still come from the legacy `Device.WiFi.MultiAP.*`
+# subtree for now and will migrate to `Device.WiFi.DataElements.Network.Device.{2,3,...}`
+# in a follow-up.
+
+objects:
+  - path: Device.WiFi.DataElements.Network
+    instances: 1
+    parameters:
+      - path: ID
+        value: "wifi-net-{cpe:04}"
+      - path: TimeStamp
+        type: xsd:dateTime
+        value: "2026-01-01T00:00:00Z"
+        writable: true
+        generator:
+          type: wallclock
+          interval: 1m
+      - path: ControllerID
+        # IEEE 1905 ALID — canonical 6-byte MAC for the EasyMesh
+        # controller. AA:BB:CC vendor prefix + 3 bytes derived from
+        # cpe instance gives a unique, valid MAC per simulated CPE.
+        value: "AA:BB:CC:{cpe:MAC:3}"
+      - path: ColocatedAgentID
+        # Same value as ControllerID on a residential gateway where
+        # the controller and agent are co-located in one device
+        # (TR-181 line 21806).
+        value: "AA:BB:CC:{cpe:MAC:3}"
+      - path: DeviceNumberOfEntries
+        type: xsd:unsignedInt
+        value: "1"
+      - path: SSIDNumberOfEntries
+        type: xsd:unsignedInt
+        value: "0"
+
+  - path: Device.WiFi.DataElements.Network.Device
+    instances: 1
+    parameters:
+      - path: ID
+        # Equal to ControllerID for the colocated-agent case. Real
+        # extender devices each get their own AL MAC in
+        # `.Network.Device.{2,3,...}.ID`.
+        value: "AA:BB:CC:{cpe:MAC:3}"
+      - path: Manufacturer
+        value: "Generic Networks"
+      - path: ManufacturerOUI
+        value: "AABBCC"
