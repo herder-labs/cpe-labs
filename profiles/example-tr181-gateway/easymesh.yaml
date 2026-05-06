@@ -38,6 +38,12 @@ objects:
       - path: AssociatedDeviceNumberOfEntries
         type: xsd:unsignedInt
         value: "2"
+      # SignalStrength is overridden per-instance in `groups:` below
+      # so the demo has one healthy backhaul (APDevice.1) and one
+      # degraded backhaul (APDevice.2). Defining it here as a
+      # multi-instance template would force both extenders to share
+      # one drift band and prevent the bad-link case from being
+      # demonstrable.
 
   - path: Device.WiFi.MultiAP.APDevice.1.Radio
     instances: 2
@@ -179,3 +185,36 @@ objects:
       - path: LastDataDownlinkRate
         type: xsd:unsignedInt
         value: "54000"
+
+# Backhaul RSSI from each extender to the controller gateway. Driven
+# per-instance so the topology panel demo has a clear contrast: a
+# healthy backhaul on extender 1 (green band) and a degraded backhaul
+# on extender 2 (red band). The topology enrichment script reads this
+# value via `Device.WiFi.MultiAP.APDevice.{i}.SignalStrength` and
+# attaches it to the gateway→extender edge as `rssi_dbm`.
+groups:
+  - prefix: Device.WiFi.MultiAP.APDevice.1
+    parameters:
+      - path: SignalStrength
+        type: xsd:int
+        value: "-55"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -68
+          max: -48
+          stepMax: 3
+
+  - prefix: Device.WiFi.MultiAP.APDevice.2
+    parameters:
+      - path: SignalStrength
+        type: xsd:int
+        value: "-85"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: -92
+          max: -78
+          stepMax: 3
