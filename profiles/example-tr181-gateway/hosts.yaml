@@ -15,7 +15,7 @@ objects:
     instances: 6
     parameters:
       - path: PhysAddress
-        value: "0E:H{i}:{cpe:HEX:4}:0{i}:0{i}"
+        value: "0E:B0:{cpe:MAC:2}:00:0{i}"
       - path: IPAddress
         value: "192.168.{cpe}.{i}0"
       - path: AddressSource
