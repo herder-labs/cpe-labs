@@ -26,9 +26,11 @@
 # subtree for now and will migrate to `Device.WiFi.DataElements.Network.Device.{2,3,...}`
 # in a follow-up.
 
-objects:
-  - path: Device.WiFi.DataElements.Network
-    instances: 1
+groups:
+  # Device.WiFi.DataElements.Network is a single-instance object per
+  # TR-181 (no {i} after "Network"). Multi-instance siblings are
+  # `Network.Device.{i}` and `Network.SSID.{i}`, modeled below.
+  - prefix: Device.WiFi.DataElements.Network
     parameters:
       - path: ID
         value: "wifi-net-{cpe:04}"
@@ -56,6 +58,7 @@ objects:
         type: xsd:unsignedInt
         value: "0"
 
+objects:
   - path: Device.WiFi.DataElements.Network.Device
     instances: 1
     parameters:

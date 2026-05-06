@@ -44,3 +44,16 @@ groups:
           max: 300000
           step: 1000
           jitter: 0.5
+
+  - prefix: Device.DeviceInfo.ProcessStatus
+    parameters:
+      - path: CPUUsage
+        type: xsd:int
+        value: "5"
+        writable: true
+        generator:
+          type: drift
+          interval: 30s
+          min: 1
+          max: 80
+          stepMax: 10
