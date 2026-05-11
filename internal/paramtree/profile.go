@@ -39,6 +39,7 @@ type Profile struct {
 	Generators          []GeneratorConfig
 	Fleet               FleetConfig
 	EventSchedule       EventScheduleConfig
+	USP                 USPConfig
 }
 
 // FleetConfig describes how many simulated CPEs to spawn from this
@@ -307,6 +308,86 @@ func (e EventScheduleConfig) RequiresDaemon() bool {
 	return e.RebootDelay > 0 || e.FactoryResetDelay > 0
 }
 
+// USPConfig configures the TR-369 / USP role of a simulated CPE.
+// Zero value disables USP; only CWMP runs.
+type USPConfig struct {
+	// Enable turns the USP role on for this device.
+	Enable bool
+
+	// EndpointID configures how the agent's TR-369 endpoint ID is
+	// derived from tree leaves. The default scheme is "os", which
+	// produces "os::<OUI><Serial>" matching the wire-compat reference
+	// controller's buildEndpointID.
+	EndpointID USPEndpointIDConfig
+
+	// ControllerEndpointID is the TR-369 endpoint ID of the controller
+	// the agent talks to. Default "self::openacs" matches the reference
+	// controller's USP_CONTROLLER_ID env var default.
+	ControllerEndpointID string
+
+	// Broker configures the MQTT 3.1.1 transport.
+	Broker USPBrokerConfig
+
+	// DataModels is the list of data-model URIs this device supports
+	// (e.g. ["device", "x_vendor"]). Advisory in v0; enforced when
+	// GetSupportedDM lands under the Request Handlers epic.
+	DataModels []string
+}
+
+// IsZero reports whether the block was omitted.
+func (u USPConfig) IsZero() bool {
+	return !u.Enable && u.EndpointID == (USPEndpointIDConfig{}) &&
+		u.ControllerEndpointID == "" && u.Broker == (USPBrokerConfig{}) &&
+		len(u.DataModels) == 0
+}
+
+// RequiresDaemon reports whether USP forces daemon mode. Any
+// USP-enabled device must outlive the bootstrap Inform so the
+// session can drain inbound and emit Notifies.
+func (u USPConfig) RequiresDaemon() bool {
+	return u.Enable
+}
+
+// USPEndpointIDConfig names the leaves the agent reads to construct
+// its TR-369 endpoint ID.
+type USPEndpointIDConfig struct {
+	// Scheme is one of the 11 TR-369 §2.2 R-ARC.2a authority schemes.
+	// Default "os".
+	Scheme string
+
+	// OUIPath is the tree path that resolves to the manufacturer OUI.
+	// Default "Device.DeviceInfo.ManufacturerOUI".
+	OUIPath string
+
+	// SerialPath is the tree path that resolves to the device serial.
+	// Default "Device.DeviceInfo.SerialNumber".
+	SerialPath string
+}
+
+// USPBrokerConfig configures the MQTT broker the agent connects to.
+type USPBrokerConfig struct {
+	// Address is the broker host. Required when USP.Enable is true.
+	Address string
+
+	// Port is the broker TCP port. Default 1883.
+	Port int
+
+	// ProtocolVersion is locked to "3.1.1" in v0. The NATS-native
+	// broker the reference controller uses does not implement MQTT 5.0.
+	ProtocolVersion string
+
+	// Username and Password are the broker credentials. Empty defaults
+	// for anonymous (Phase A authentication posture).
+	Username string
+	Password string
+
+	// KeepAliveSeconds is the MQTT KEEPALIVE in seconds. Default 60.
+	KeepAliveSeconds int
+
+	// CleanSession sets the MQTT CleanSession flag. Default true.
+	CleanSession bool
+}
+
 // TransferConfig configures simulated file-transfer behavior for the
 // Download and Upload RPC handlers. Zero value is "no fault injection,
 // callers apply their own default delay" — the handlers' callbacks
@@ -405,6 +486,7 @@ func LoadProfileFromReader(r io.Reader, path string) (*Profile, error) {
 		Generators:          mc.Generators,
 		Fleet:               mc.Fleet,
 		EventSchedule:       mc.EventSchedule,
+		USP:                 mc.USP,
 	}, nil
 }
 
@@ -423,6 +505,33 @@ type profile struct {
 	Generators          []rawGenerator          `yaml:"generators"`
 	Fleet               *rawFleet               `yaml:"fleet"`
 	EventSchedule       *rawEventSchedule       `yaml:"eventSchedule"`
+	USP                 *rawUSP                 `yaml:"usp"`
+}
+
+// rawUSP is the YAML schema for the usp: block. nil pointer means
+// USP is not configured on this device.
+type rawUSP struct {
+	Enable               bool                `yaml:"enable"`
+	EndpointID           *rawUSPEndpointID   `yaml:"endpointID"`
+	ControllerEndpointID string              `yaml:"controllerEndpointID"`
+	Broker               *rawUSPBroker       `yaml:"broker"`
+	DataModels           []string            `yaml:"dataModels"`
+}
+
+type rawUSPEndpointID struct {
+	Scheme     string `yaml:"scheme"`
+	OUIPath    string `yaml:"ouiPath"`
+	SerialPath string `yaml:"serialPath"`
+}
+
+type rawUSPBroker struct {
+	Address          string `yaml:"address"`
+	Port             int    `yaml:"port"`
+	ProtocolVersion  string `yaml:"protocolVersion"`
+	Username         string `yaml:"username"`
+	Password         string `yaml:"password"`
+	KeepAliveSeconds int    `yaml:"keepAliveSeconds"`
+	CleanSession     *bool  `yaml:"cleanSession"`
 }
 
 // rawObject is one TR-069/TR-098 multi-instance object. Path names the
@@ -717,6 +826,7 @@ func loadProfileDir(dir string) (*Profile, error) {
 		Generators:          mc.Generators,
 		Fleet:               mc.Fleet,
 		EventSchedule:       mc.EventSchedule,
+		USP:                 mc.USP,
 	}, nil
 }
 
@@ -745,6 +855,7 @@ type mergedConfig struct {
 	Generators          []GeneratorConfig
 	Fleet               FleetConfig
 	EventSchedule       EventScheduleConfig
+	USP                 USPConfig
 }
 
 // mergeFiles applies all files' parameters to tree, accumulates
@@ -1223,6 +1334,131 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 		fleetCfg.SerialPattern = "{base}-{i}"
 	}
 
+	// Merge usp with conflict detection. When enabled, broker.address is
+	// required, protocolVersion must be "3.1.1" (NATS-native broker does
+	// not support MQTT 5.0), and the configured endpoint-ID paths must
+	// resolve to string leaves in the merged tree (CLAUDE.md anchor #3:
+	// no TR-181 / TR-098 default in core; the operator declares paths
+	// explicitly).
+	var uspCfg USPConfig
+	var uspSource string
+	for _, lf := range files {
+		raw := lf.prof.USP
+		if raw == nil {
+			continue
+		}
+		if uspSource != "" {
+			return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+				fmt.Errorf("%s and %s both declare usp", uspSource, lf.path))
+		}
+
+		var eid USPEndpointIDConfig
+		if raw.EndpointID != nil {
+			eid.Scheme = strings.TrimSpace(raw.EndpointID.Scheme)
+			eid.OUIPath = strings.TrimSpace(raw.EndpointID.OUIPath)
+			eid.SerialPath = strings.TrimSpace(raw.EndpointID.SerialPath)
+		}
+		if eid.Scheme == "" {
+			eid.Scheme = "os"
+		}
+		if eid.OUIPath == "" {
+			eid.OUIPath = "Device.DeviceInfo.ManufacturerOUI"
+		}
+		if eid.SerialPath == "" {
+			eid.SerialPath = "Device.DeviceInfo.SerialNumber"
+		}
+
+		var brokerCfg USPBrokerConfig
+		brokerCfg.CleanSession = true
+		if raw.Broker != nil {
+			brokerCfg.Address = strings.TrimSpace(raw.Broker.Address)
+			brokerCfg.Port = raw.Broker.Port
+			brokerCfg.ProtocolVersion = strings.TrimSpace(raw.Broker.ProtocolVersion)
+			brokerCfg.Username = raw.Broker.Username
+			brokerCfg.Password = raw.Broker.Password
+			brokerCfg.KeepAliveSeconds = raw.Broker.KeepAliveSeconds
+			if raw.Broker.CleanSession != nil {
+				brokerCfg.CleanSession = *raw.Broker.CleanSession
+			}
+		}
+		if brokerCfg.Port == 0 {
+			brokerCfg.Port = 1883
+		}
+		if brokerCfg.ProtocolVersion == "" {
+			brokerCfg.ProtocolVersion = "3.1.1"
+		}
+		if brokerCfg.KeepAliveSeconds == 0 {
+			brokerCfg.KeepAliveSeconds = 60
+		}
+
+		controllerEID := strings.TrimSpace(raw.ControllerEndpointID)
+		if controllerEID == "" {
+			controllerEID = "self::openacs"
+		}
+		dataModels := raw.DataModels
+		if len(dataModels) == 0 {
+			dataModels = []string{"device"}
+		}
+
+		uspCfg = USPConfig{
+			Enable:               raw.Enable,
+			EndpointID:           eid,
+			ControllerEndpointID: controllerEID,
+			Broker:               brokerCfg,
+			DataModels:           dataModels,
+		}
+		uspSource = lf.path
+
+		if uspCfg.Enable {
+			if brokerCfg.Address == "" {
+				return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s: usp.broker.address is required when usp.enable is true", lf.path))
+			}
+			if brokerCfg.ProtocolVersion != "3.1.1" {
+				return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s: usp.broker.protocolVersion %q is not supported (only \"3.1.1\"; NATS-native broker does not implement MQTT 5.0)",
+						lf.path, brokerCfg.ProtocolVersion))
+			}
+			if !strings.Contains(controllerEID, "::") {
+				return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s: usp.controllerEndpointID %q is malformed (expected <scheme>::<id>)", lf.path, controllerEID))
+			}
+			for _, p := range [2]struct{ field, path string }{
+				{"ouiPath", eid.OUIPath},
+				{"serialPath", eid.SerialPath},
+			} {
+				v, gerr := tree.Get(p.path)
+				if gerr != nil {
+					return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+						fmt.Errorf("%s: usp.endpointID.%s references unknown path %q: %w",
+							lf.path, p.field, p.path, gerr))
+				}
+				if v.Type != TypeString {
+					return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+						fmt.Errorf("%s: usp.endpointID.%s path %q must be a string leaf, got %s",
+							lf.path, p.field, p.path, v.Type))
+				}
+			}
+		}
+	}
+
+	// Install Internal.Reboot.Cause system leaf when USP is enabled.
+	// This leaf gates session.Run's first-contact emission. Process
+	// restart resets to LocalFactoryReset because LoadProfile rebuilds
+	// the tree from scratch every time.
+	if uspCfg.Enable {
+		const rebootCausePath = "Internal.Reboot.Cause"
+		const rebootCauseFactoryReset = "LocalFactoryReset"
+		if _, gerr := tree.Get(rebootCausePath); gerr != nil {
+			if merr := tree.Mount(rebootCausePath, NewLeaf(Value{
+				Type: TypeString, Raw: rebootCauseFactoryReset, Writable: false,
+			})); merr != nil {
+				return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInternal,
+					fmt.Errorf("install %s: %w", rebootCausePath, merr))
+			}
+		}
+	}
+
 	return mergedConfig{
 		InformParams:        infParams,
 		DeviceIDPaths:       devIDPaths,
@@ -1232,6 +1468,7 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 		Generators:          generators,
 		Fleet:               fleetCfg,
 		EventSchedule:       eventScheduleCfg,
+		USP:                 uspCfg,
 	}, nil
 }
 
