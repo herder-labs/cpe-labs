@@ -1,0 +1,30 @@
+# TR-369 / USP role for this CPE.
+#
+# Setting enable: true turns on the USP agent next to the existing CWMP
+# session. The agent derives its endpoint ID from the OUI + Serial
+# leaves declared in deviceinfo.yaml (default paths shown explicitly
+# below for documentation), connects to the configured MQTT 3.1.1
+# broker, and on first contact emits a Notify(OnBoardRequest) so the
+# controller materializes a device row.
+#
+# Disabled by default so existing CWMP-only consumers of this profile
+# directory keep working unchanged.
+
+usp:
+  enable: false
+
+  endpointID:
+    scheme: os
+    ouiPath: Device.DeviceInfo.ManufacturerOUI
+    serialPath: Device.DeviceInfo.SerialNumber
+
+  controllerEndpointID: "self::openacs"
+
+  broker:
+    address: nats
+    port: 1883
+    protocolVersion: "3.1.1"
+    keepAliveSeconds: 60
+    cleanSession: true
+
+  dataModels: [device]
