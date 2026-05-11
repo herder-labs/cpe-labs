@@ -37,6 +37,11 @@ import (
 	"github.com/herder-labs/cpe-labs/internal/cwmp/transport"
 	"github.com/herder-labs/cpe-labs/internal/generators"
 	"github.com/herder-labs/cpe-labs/internal/paramtree"
+	"github.com/herder-labs/cpe-labs/internal/usp/identity"
+	"github.com/herder-labs/cpe-labs/internal/usp/mtp"
+	mqttmtp "github.com/herder-labs/cpe-labs/internal/usp/mtp/mqtt"
+	"github.com/herder-labs/cpe-labs/internal/usp/notify"
+	uspsession "github.com/herder-labs/cpe-labs/internal/usp/session"
 	"github.com/herder-labs/cpe-labs/internal/version"
 )
 
@@ -70,6 +75,9 @@ type cpeStack struct {
 	runOpts      *cwmp.RunSessionOptions
 	genRunner    *generators.Runner
 	hasScheduler bool
+
+	uspAdapter mtp.Adapter            // nil when USP disabled
+	uspOpts    *uspsession.Options    // nil when USP disabled
 }
 
 func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
@@ -216,12 +224,16 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 
 	hasAnyScheduler := false
 	hasAnyGenerators := false
+	hasAnyUSP := false
 	for _, st := range stacks {
 		if st.hasScheduler {
 			hasAnyScheduler = true
 		}
 		if st.genRunner != nil {
 			hasAnyGenerators = true
+		}
+		if st.uspOpts != nil {
+			hasAnyUSP = true
 		}
 	}
 	eventScheduleRequiresDaemon := templateProf.EventSchedule.RequiresDaemon()
@@ -235,6 +247,7 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 		"scheduler_enabled", hasAnyScheduler,
 		"generators_enabled", hasAnyGenerators,
 		"event_schedule_daemon", eventScheduleRequiresDaemon,
+		"usp_enabled", hasAnyUSP,
 	)
 
 	// Start the CR listener now (after all per-CPE endpoints are
@@ -276,8 +289,8 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 
 	// One-shot mode: exit after bootstrap if nothing is keeping us
 	// alive (no listener, no scheduler, no generators, no
-	// event-schedule deferral that needs to fire later).
-	if listener == nil && !hasAnyScheduler && !hasAnyGenerators && !eventScheduleRequiresDaemon {
+	// event-schedule deferral that needs to fire later, no USP).
+	if listener == nil && !hasAnyScheduler && !hasAnyGenerators && !eventScheduleRequiresDaemon && !hasAnyUSP {
 		return nil
 	}
 
@@ -288,9 +301,26 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 		"scheduler", hasAnyScheduler,
 		"generators", hasAnyGenerators,
 		"event_schedule", eventScheduleRequiresDaemon,
+		"usp", hasAnyUSP,
 	)
+
+	var uspWG sync.WaitGroup
+	for _, st := range stacks {
+		if st.uspOpts == nil {
+			continue
+		}
+		uspWG.Add(1)
+		go func(s *cpeStack) {
+			defer uspWG.Done()
+			if err := uspsession.Run(signalCtx, *s.uspOpts); err != nil {
+				logger.Warn("usp session exited with error", "cpe_id", s.id, "err", err.Error())
+			}
+		}(st)
+	}
+
 	<-signalCtx.Done()
 	logger.Info("cpe-sim shutting down")
+	uspWG.Wait()
 	return nil
 }
 
@@ -754,6 +784,49 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 		}
 	}
 
+	var uspAdapter mtp.Adapter
+	var uspOpts *uspsession.Options
+	if prof.USP.Enable {
+		oui, gerr := prof.Tree.Get(prof.USP.EndpointID.OUIPath)
+		if gerr != nil {
+			return nil, fmt.Errorf("read usp OUI leaf %q: %w", prof.USP.EndpointID.OUIPath, gerr)
+		}
+		serial, gerr := prof.Tree.Get(prof.USP.EndpointID.SerialPath)
+		if gerr != nil {
+			return nil, fmt.Errorf("read usp Serial leaf %q: %w", prof.USP.EndpointID.SerialPath, gerr)
+		}
+		agentEID := identity.EID(oui.Raw, serial.Raw)
+		if vErr := identity.Validate(agentEID); vErr != nil {
+			return nil, fmt.Errorf("agent EID %q invalid: %w", agentEID, vErr)
+		}
+		adapter, mErr := mqttmtp.New(mqttmtp.Options{
+			BrokerHost:       prof.USP.Broker.Address,
+			BrokerPort:       prof.USP.Broker.Port,
+			Username:         prof.USP.Broker.Username,
+			Password:         prof.USP.Broker.Password,
+			EndpointID:       agentEID,
+			KeepAlive:        time.Duration(prof.USP.Broker.KeepAliveSeconds) * time.Second,
+			CleanSession:     prof.USP.Broker.CleanSession,
+			Logger:           in.logger.With("cpe_id", in.id, "role", "usp"),
+		})
+		if mErr != nil {
+			return nil, fmt.Errorf("usp mqtt adapter: %w", mErr)
+		}
+		uspAdapter = adapter
+		uspOpts = &uspsession.Options{
+			Tree:             prof.Tree,
+			Adapter:          adapter,
+			AgentEID:         agentEID,
+			ControllerEID:    prof.USP.ControllerEndpointID,
+			OnBoardBuilder:   &notify.OnBoardRequestBuilder{
+				OUIPath:    prof.USP.EndpointID.OUIPath,
+				SerialPath: prof.USP.EndpointID.SerialPath,
+			},
+			BootEventBuilder: &notify.BootEventBuilder{},
+			Logger:           in.logger.With("cpe_id", in.id, "role", "usp"),
+		}
+	}
+
 	return &cpeStack{
 		id:           in.id,
 		serial:       in.serial,
@@ -765,6 +838,8 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 		runOpts:      runOpts,
 		genRunner:    genRunner,
 		hasScheduler: hasScheduler,
+		uspAdapter:   uspAdapter,
+		uspOpts:      uspOpts,
 	}, nil
 }
 
