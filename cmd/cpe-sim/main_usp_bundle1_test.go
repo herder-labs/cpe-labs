@@ -297,7 +297,7 @@ func newControllerHub(t *testing.T, host string, port int) *controllerHub {
 		notifies: make(chan *uspproto.Notify, 16),
 	}
 	h.client = newSubscriberClient(t, host, port, fmt.Sprintf("bundle1-hub-%d", time.Now().UnixNano()))
-	if token := h.client.Subscribe("usp/v1/controller", 1, func(_ paho.Client, msg paho.Message) {
+	if token := h.client.Subscribe("usp/v1/controller/#", 1, func(_ paho.Client, msg paho.Message) {
 		_, parsed, err := codec.UnwrapRecord(msg.Payload())
 		if err != nil {
 			t.Logf("hub UnwrapRecord: %v", err)
