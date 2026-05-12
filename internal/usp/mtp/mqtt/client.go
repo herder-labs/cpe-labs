@@ -140,7 +140,7 @@ func (c *Client) Send(ctx context.Context, record []byte) error {
 	if client == nil {
 		return &cpeerr.Error{Op: "mqtt.Send", Kind: cpeerr.KindInvalidArgument, Err: errors.New("Connect not called")}
 	}
-	token := client.Publish(mtp.TopicControllerInbox, 1, false, record)
+	token := client.Publish(mtp.TopicControllerInbox(c.opts.EndpointID), 1, false, record)
 	select {
 	case <-ctx.Done():
 		return &cpeerr.Error{Op: "mqtt.Send", Kind: cpeerr.KindInternal, Err: ctx.Err()}
@@ -169,14 +169,22 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) onConnect(client paho.Client) {
-	topic := mtp.TopicAgentInbox(c.opts.EndpointID)
-	token := client.Subscribe(topic, 0, c.onMessage)
+	// Subscribe both the exact agent inbox and a multi-level wildcard
+	// so messages addressed with /reply-to= or any other suffix per
+	// the TR-369 NATS-MQTT reply-to convention reach Recv() too.
+	filters := map[string]byte{
+		mtp.TopicAgentInbox(c.opts.EndpointID):         0,
+		mtp.TopicAgentInboxWildcard(c.opts.EndpointID): 0,
+	}
+	token := client.SubscribeMultiple(filters, c.onMessage)
 	token.Wait()
 	if err := token.Error(); err != nil {
-		c.logger.Warn("usp mqtt subscribe failed", "topic", topic, "err", err)
+		c.logger.Warn("usp mqtt subscribe failed", "filters", filters, "err", err)
 		return
 	}
-	c.logger.Info("usp mqtt subscribed", "topic", topic)
+	c.logger.Info("usp mqtt subscribed",
+		"exact", mtp.TopicAgentInbox(c.opts.EndpointID),
+		"wildcard", mtp.TopicAgentInboxWildcard(c.opts.EndpointID))
 }
 
 func (c *Client) onMessage(_ paho.Client, msg paho.Message) {

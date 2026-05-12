@@ -49,7 +49,7 @@ func TestRunDaemonModeUSPOnBoardRequest(t *testing.T) {
 
 	var notifyCount atomic.Int32
 	gotCh := make(chan []byte, 4)
-	if token := subscriber.Subscribe("usp/v1/controller", 1, func(_ paho.Client, msg paho.Message) {
+	if token := subscriber.Subscribe("usp/v1/controller/#", 1, func(_ paho.Client, msg paho.Message) {
 		payload := make([]byte, len(msg.Payload()))
 		copy(payload, msg.Payload())
 		notifyCount.Add(1)
