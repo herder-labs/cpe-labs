@@ -73,9 +73,9 @@ The sections below describe the longer-term USP architecture cpe-labs is buildin
 
 - CLI flags like `--usp-mtp=*`, `--usp-mqtt-addr=*`, `--usp-ws-url=*`, `--usp-stomp-addr=*` are **not yet implemented**. All USP knobs go through the profile's `usp:` block.
 - WebSocket and STOMP MTPs are not yet implemented.
-- Request handlers `Get`, `Set`, `Add`, `Delete`, `Operate(Device.Reboot())` **are implemented** as of Bundle 1. `GetInstances`, `GetSupportedDM`, async-Request `Operate`, and `Operate(Device.FactoryReset())` remain.
-- Autonomous `Notify(ObjectCreation)` and `Notify(ObjectDeletion)` **are implemented** as of Bundle 1; they fire unconditionally after the matching Add/Delete handler succeeds. Subscription-gated emission lands with the Subscription Table epic.
-- `Notify(ValueChange)`, `Notify(Periodic)`, and Subscription Table reconciliation remain (epics #5 / #6).
+- Request handlers `Get`, `Set`, `Add`, `Delete`, `Operate(Device.Reboot())`, `GetInstances`, `GetSupportedDM` **are implemented**. Async-Request `Operate` and `Operate(Device.FactoryReset())` remain.
+- Autonomous `Notify(ObjectCreation)`, `Notify(ObjectDeletion)`, `Notify(ValueChange)`, `Notify(Event)`, `Notify(Periodic)` **are implemented** and gated by the per-CPE Subscription evaluator. Operators provision Subscriptions via the existing `Set` / `Add` / `Delete` handlers against `Device.LocalAgent.Subscription.{i}.`.
+- `Notify(OperationComplete)` remains; deferred until the controller exercises async-Request `Operate`.
 
 ## Request handlers (Bundle 1)
 
@@ -109,9 +109,23 @@ objects:
 
 Each entry under `uniqueKeys` is a key-set (a list of parameter names relative to the object). cpe-labs reads the matching leaves under the newly-instantiated instance to populate the AddResp / ObjectCreation `unique_keys` map. Omitting the block produces an empty `unique_keys` map; the controller falls back to identifying instances by `instantiated_path` alone. See [profile-yaml.md](../reference/profile-yaml.md#usp) for the full schema.
 
-## Subscription-driven Notify (forward-looking)
+## Subscription-driven Notify
 
-Most of the future content below describes work that is not yet implemented; see the open issues for `GetSupportedDM`, `GetInstances`, the Subscription Table, and the autonomous-Notify evaluator.
+When `usp.enable: true`, cpe-labs auto-installs `Device.LocalAgent.Subscription.{i}.` as a writable multi-instance table and seeds instance 1 with the obuspa-fixture-equivalent Boot! event Subscription (`Enable: true`, `ID: default-boot-event-ACS`, `NotifType: Event`, `ReferenceList: Device.Boot!`, `Persistent: true`). The seed row is mutable; operators may override it, disable it, or add new rows via the existing `Set` / `Add` / `Delete` handlers.
+
+Each enabled Subscription drives a per-NotifType trigger:
+
+| NotifType | Trigger | Notify emitted |
+| --- | --- | --- |
+| `Event` | Matching event fires (e.g. `Device.Boot!` after `Operate(Device.Reboot())`) | `Notify(Event)` with `event_name` |
+| `ValueChange` | A leaf in `ReferenceList` changes value (via `Set`, generator write, etc.) | `Notify(ValueChange)` with `param_path` + `param_value` |
+| `ObjectCreation` | A multi-instance row materializes under a prefix in `ReferenceList` (via `Add`) | `Notify(ObjectCreation)` with `obj_path` + `unique_keys` |
+| `ObjectDeletion` | A multi-instance row is removed under a prefix in `ReferenceList` (via `Delete`) | `Notify(ObjectDeletion)` |
+| `Periodic` | `Period`-second cadence (±10% jitter) | `Notify(ValueChange)` per path in `ReferenceList` |
+
+Subscription matching is exact-path for `Event` / `ValueChange` and prefix for `ObjectCreation` / `ObjectDeletion`. The evaluator debounces table-write rescans by 50ms so a controller doing multi-row provisioning sees its writes settle before triggers register.
+
+`OperationComplete` Subscriptions and cross-restart Subscription persistence are out of scope for now.
 
 ## Architectural fit
 
