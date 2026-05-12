@@ -10,6 +10,8 @@
 objects:
   - path: Device.WiFi.Radio
     instances: 2
+    uniqueKeys:
+      - [Name]
     parameters:
       - path: Enable
         type: xsd:boolean
@@ -40,6 +42,9 @@ objects:
 
   - path: Device.WiFi.SSID
     instances: 4
+    uniqueKeys:
+      - [BSSID]
+      - [Name]
     parameters:
       - path: Enable
         type: xsd:boolean
@@ -63,6 +68,8 @@ objects:
 
   - path: Device.WiFi.AccessPoint
     instances: 4
+    uniqueKeys:
+      - [SSIDReference]
     parameters:
       - path: Enable
         type: xsd:boolean
