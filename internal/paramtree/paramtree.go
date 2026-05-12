@@ -18,15 +18,78 @@ import (
 	"github.com/herder-labs/cpe-labs/internal/cpeerr"
 )
 
+// WriteKind categorises a Tree mutation for OnWrite callbacks.
+type WriteKind int
+
+const (
+	// WriteSet means a single leaf's Raw value was overwritten (Tree.Set).
+	WriteSet WriteKind = iota + 1
+	// WriteSetBatch means a batched multi-leaf write (Tree.SetBatch).
+	WriteSetBatch
+	// WriteSetSystem means an internal Raw rewrite that bypassed Writable (Tree.SetSystem).
+	WriteSetSystem
+	// WriteAddObject means a new multi-instance row was allocated (Tree.AddObject).
+	WriteAddObject
+	// WriteDeleteObject means a multi-instance row was removed (Tree.DeleteObject).
+	WriteDeleteObject
+)
+
 // Tree is the in-memory parameter tree for one simulated CPE.
 type Tree struct {
 	mu   sync.RWMutex
 	root *Node
+
+	cbMu     sync.RWMutex
+	writeCBs []func(paths []string, kind WriteKind)
 }
 
 // New returns an empty tree.
 func New() *Tree {
 	return &Tree{root: NewBranch()}
+}
+
+// OnWrite registers a callback that fires after every successful Set,
+// SetBatch, SetSystem, AddObject, or DeleteObject. The callback runs
+// after the tree's write lock is released, so callbacks may re-enter
+// the tree freely. Ordering between concurrent reads and the callback
+// is not guaranteed — the callback contract is eventually consistent.
+// Multiple callbacks supported; called in registration order.
+func (t *Tree) OnWrite(fn func(paths []string, kind WriteKind)) {
+	if fn == nil {
+		return
+	}
+	t.cbMu.Lock()
+	t.writeCBs = append(t.writeCBs, fn)
+	t.cbMu.Unlock()
+}
+
+func (t *Tree) fireOnWrite(paths []string, kind WriteKind) {
+	t.cbMu.RLock()
+	cbs := t.writeCBs
+	t.cbMu.RUnlock()
+	if len(cbs) == 0 {
+		return
+	}
+	for _, cb := range cbs {
+		cb(paths, kind)
+	}
+}
+
+// IsAddDeletable reports whether the path names a multi-instance table
+// whose children can be allocated via AddObject. Returns false for
+// singletons, leaves, and unknown paths.
+func (t *Tree) IsAddDeletable(path string) bool {
+	segments, err := parsePath(path)
+	if err != nil {
+		return false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	n, err := t.lookup(segments)
+	if err != nil {
+		return false
+	}
+	return n.table != nil
 }
 
 // Mount places n at the given path in the tree, creating any missing
@@ -102,6 +165,14 @@ func (t *Tree) Set(path string, v Value) error {
 	if err != nil {
 		return err
 	}
+
+	var fire bool
+	defer func() {
+		if fire {
+			t.fireOnWrite([]string{path}, WriteSet)
+		}
+	}()
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -125,6 +196,7 @@ func (t *Tree) Set(path string, v Value) error {
 		return err
 	}
 	*n.leaf = v
+	fire = true
 	return nil
 }
 
@@ -141,6 +213,14 @@ func (t *Tree) SetSystem(path, raw string) error {
 	if err != nil {
 		return err
 	}
+
+	var fire bool
+	defer func() {
+		if fire {
+			t.fireOnWrite([]string{path}, WriteSetSystem)
+		}
+	}()
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -156,6 +236,7 @@ func (t *Tree) SetSystem(path, raw string) error {
 		return err
 	}
 	n.leaf.Raw = raw
+	fire = true
 	return nil
 }
 
@@ -340,6 +421,13 @@ func (t *Tree) SetBatch(setters []Setter) ([]BatchResult, error) {
 		return nil, nil
 	}
 
+	var firePaths []string
+	defer func() {
+		if len(firePaths) > 0 {
+			t.fireOnWrite(firePaths, WriteSetBatch)
+		}
+	}()
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -388,6 +476,7 @@ func (t *Tree) SetBatch(setters []Setter) ([]BatchResult, error) {
 	}
 
 	results := make([]BatchResult, len(resolved))
+	firePaths = make([]string, 0, len(resolved))
 	for i, r := range resolved {
 		*r.node.leaf = r.new
 		results[i] = BatchResult{
@@ -396,6 +485,7 @@ func (t *Tree) SetBatch(setters []Setter) ([]BatchResult, error) {
 			NewValue: r.new,
 			Changed:  r.old.Raw != r.new.Raw,
 		}
+		firePaths = append(firePaths, setters[i].Path)
 	}
 	return results, nil
 }
@@ -640,6 +730,14 @@ func (t *Tree) AddObject(parentPath string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+
+	var firedPath string
+	defer func() {
+		if firedPath != "" {
+			t.fireOnWrite([]string{firedPath}, WriteAddObject)
+		}
+	}()
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -666,6 +764,7 @@ func (t *Tree) AddObject(parentPath string) (int, error) {
 		instance++
 	}
 	n.children[strconv.Itoa(instance)] = n.table.template.clone()
+	firedPath = parentPath + "." + strconv.Itoa(instance) + "."
 	return instance, nil
 }
 
@@ -683,6 +782,13 @@ func (t *Tree) DeleteObject(path string) error {
 		return cpeerr.Wrap("paramtree.DeleteObject", cpeerr.KindInvalidArgument,
 			fmt.Errorf("cannot delete root"))
 	}
+
+	var fire bool
+	defer func() {
+		if fire {
+			t.fireOnWrite([]string{path + "."}, WriteDeleteObject)
+		}
+	}()
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -708,5 +814,6 @@ func (t *Tree) DeleteObject(path string) error {
 			fmt.Errorf("instance %s of %s not found", last, joinPath(parentSegs)))
 	}
 	delete(parent.children, last)
+	fire = true
 	return nil
 }
