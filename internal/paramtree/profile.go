@@ -1504,6 +1504,11 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 					fmt.Errorf("install %s: %w", rebootCausePath, merr))
 			}
 		}
+
+		if ierr := installSubscriptionTable(tree); ierr != nil {
+			return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInternal, ierr)
+		}
+		uniqueKeys["Device.LocalAgent.Subscription."] = [][]string{{"ID"}}
 	}
 
 	return mergedConfig{
@@ -1923,4 +1928,66 @@ func profileErrAt(source, paramPath string, cause error) error {
 	}
 	return cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
 		fmt.Errorf("%s: parameter %q: %w", source, paramPath, cause))
+}
+
+// installSubscriptionTable installs Device.LocalAgent.Subscription.{i}.
+// as a writable multi-instance table and seeds instance 1 with the
+// obuspa-fixture defaults so a USP controller sees a Boot! subscription
+// out of the box. Idempotent: returns nil if the table is already
+// present.
+func installSubscriptionTable(tree *Tree) error {
+	const subPath = "Device.LocalAgent.Subscription"
+	if tree.IsAddDeletable(subPath) {
+		return nil
+	}
+
+	template := NewBranch()
+	type leafSpec struct {
+		name     string
+		typ      Type
+		raw      string
+		writable bool
+	}
+	leaves := []leafSpec{
+		{"Alias", TypeString, "", true},
+		{"Enable", TypeBoolean, "false", true},
+		{"ID", TypeString, "", true},
+		{"Recipient", TypeString, "Device.LocalAgent.Controller.1", true},
+		{"NotifType", TypeString, "ValueChange", true},
+		{"ReferenceList", TypeString, "", true},
+		{"Persistent", TypeBoolean, "true", true},
+		{"Period", TypeUnsignedInt, "0", true},
+		{"TimeToLive", TypeUnsignedInt, "0", true},
+		{"NotifRetry", TypeBoolean, "false", true},
+	}
+	for _, lf := range leaves {
+		if err := template.Attach(lf.name, NewLeaf(Value{Type: lf.typ, Raw: lf.raw, Writable: lf.writable})); err != nil {
+			return fmt.Errorf("attach subscription leaf %s: %w", lf.name, err)
+		}
+	}
+	if err := tree.AddTable(subPath, template); err != nil {
+		return fmt.Errorf("AddTable %s: %w", subPath, err)
+	}
+	inst, err := tree.AddObject(subPath)
+	if err != nil {
+		return fmt.Errorf("AddObject %s: %w", subPath, err)
+	}
+	prefix := subPath + "." + strconv.Itoa(inst) + "."
+	seed := []struct {
+		path, value string
+	}{
+		{prefix + "Alias", "default-boot-event"},
+		{prefix + "Enable", "true"},
+		{prefix + "ID", "default-boot-event-ACS"},
+		{prefix + "Recipient", "Device.LocalAgent.Controller.1"},
+		{prefix + "NotifType", "Event"},
+		{prefix + "ReferenceList", "Device.Boot!"},
+		{prefix + "Persistent", "true"},
+	}
+	for _, s := range seed {
+		if err := tree.SetSystem(s.path, s.value); err != nil {
+			return fmt.Errorf("SetSystem %s: %w", s.path, err)
+		}
+	}
+	return nil
 }
