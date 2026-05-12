@@ -40,6 +40,15 @@ type Profile struct {
 	Fleet               FleetConfig
 	EventSchedule       EventScheduleConfig
 	USP                 USPConfig
+
+	// UniqueKeys maps a multi-instance object's path-template prefix
+	// (e.g. "Device.WiFi.SSID.") to the list of unique-key sets that
+	// identify rows in that object. Each key-set is a list of param
+	// names relative to the object. Populated from objects[].uniqueKeys
+	// in the profile YAML. Consumed by the USP Add handler to populate
+	// AddResp unique_keys and by GetInstances to populate CurrInstance
+	// unique_keys.
+	UniqueKeys map[string][][]string
 }
 
 // FleetConfig describes how many simulated CPEs to spawn from this
@@ -487,6 +496,7 @@ func LoadProfileFromReader(r io.Reader, path string) (*Profile, error) {
 		Fleet:               mc.Fleet,
 		EventSchedule:       mc.EventSchedule,
 		USP:                 mc.USP,
+		UniqueKeys:          mc.UniqueKeys,
 	}, nil
 }
 
@@ -544,6 +554,7 @@ type rawUSPBroker struct {
 type rawObject struct {
 	Path       string            `yaml:"path"`
 	Instances  int               `yaml:"instances"`
+	UniqueKeys [][]string        `yaml:"uniqueKeys"`
 	Parameters []rawProfileParam `yaml:"parameters"`
 }
 
@@ -827,6 +838,7 @@ func loadProfileDir(dir string) (*Profile, error) {
 		Fleet:               mc.Fleet,
 		EventSchedule:       mc.EventSchedule,
 		USP:                 mc.USP,
+		UniqueKeys:          mc.UniqueKeys,
 	}, nil
 }
 
@@ -856,6 +868,7 @@ type mergedConfig struct {
 	Fleet               FleetConfig
 	EventSchedule       EventScheduleConfig
 	USP                 USPConfig
+	UniqueKeys          map[string][][]string
 }
 
 // mergeFiles applies all files' parameters to tree, accumulates
@@ -881,6 +894,8 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 		source string
 	}
 	var allRaw []rawWithSource
+	uniqueKeys := make(map[string][][]string)
+	uniqueKeysSource := make(map[string]string)
 	for _, lf := range files {
 		for _, raw := range lf.prof.Parameters {
 			allRaw = append(allRaw, rawWithSource{raw, lf.path})
@@ -891,6 +906,38 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 		}
 		for _, raw := range expanded {
 			allRaw = append(allRaw, rawWithSource{raw, lf.path})
+		}
+		// Capture uniqueKeys per object-path prefix. expandObjects has
+		// already validated obj.Path is well-formed (non-empty, no {i},
+		// no trailing dot); the prefix is obj.Path + "." which matches
+		// the multi-instance object paths in the materialized tree
+		// (Device.WiFi.SSID.).
+		for _, obj := range lf.prof.Objects {
+			if len(obj.UniqueKeys) == 0 {
+				continue
+			}
+			if obj.Path == "" || strings.HasSuffix(obj.Path, ".") || strings.Contains(obj.Path, "{i}") {
+				// expandObjects below will surface the formatted error;
+				// skip uniqueKeys capture so we do not double-report.
+				continue
+			}
+			prefix := obj.Path + "."
+			if prev, dup := uniqueKeysSource[prefix]; dup {
+				return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s and %s both declare uniqueKeys for object %s", prev, lf.path, prefix))
+			}
+			for _, set := range obj.UniqueKeys {
+				if len(set) == 0 {
+					return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+						fmt.Errorf("%s: objects[].uniqueKeys for %s contains an empty key-set", lf.path, prefix))
+				}
+			}
+			keySets := make([][]string, 0, len(obj.UniqueKeys))
+			for _, set := range obj.UniqueKeys {
+				keySets = append(keySets, append([]string(nil), set...))
+			}
+			uniqueKeys[prefix] = keySets
+			uniqueKeysSource[prefix] = lf.path
 		}
 		expandedG, err := expandGroups(lf.prof.Groups, lf.path)
 		if err != nil {
@@ -1469,6 +1516,7 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 		Fleet:               fleetCfg,
 		EventSchedule:       eventScheduleCfg,
 		USP:                 uspCfg,
+		UniqueKeys:          uniqueKeys,
 	}, nil
 }
 
