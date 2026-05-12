@@ -20,6 +20,7 @@ groups:               # single-instance prefix groupings
 informParameters:     # per-event-code parameter lists for Inform builder
 periodicInformPaths:  # leaves the per-CPE periodic Inform timer reads
 generators:           # top-level generators list
+clients:              # client fabricators (row-count churn per table)
 fleet:                # fleet count + pools + serial pattern
 connectionRequest:    # CR listener auth + throttle
 transfer:             # Download / Upload TransferComplete defaults + faults
@@ -190,6 +191,48 @@ generators:
 | `mode` | enum | `cycle` (default) or `random`. |
 
 The same fields work in the inline form. See [Value Generators](../guides/generators.md) for full validation rules and behavior.
+
+## `clients`
+
+Client fabricators drive row-count churn on a configured multi-instance table — WiFi stations join/leave AccessPoint AssociatedDevice tables; LAN hosts come and go on `Device.Hosts.Host`. Each materialize/drop fires `Tree.AddObject` / `Tree.DeleteObject`, which the USP Subscription evaluator picks up to emit autonomous `Notify(ObjectCreation)` / `Notify(ObjectDeletion)` when a matching Subscription exists. CWMP `valueChange` Informs fire too via the existing callback chain.
+
+```yaml
+clients:
+  - path: Device.WiFi.AccessPoint.1.AssociatedDevice
+    type: wifiStation
+    targetCount: 6
+    churnInterval: 30s
+    churnRate: 1
+    rowDefaults:
+      MACAddress: "0E:A1:{cpe:MAC:2}:01:{seq:hex:02}"
+      Active: "true"
+
+  - path: Device.Hosts.Host
+    type: lanHost
+    targetCount: 8
+    churnInterval: 60s
+    churnRate: 1
+    rowDefaults:
+      HostName: "host-{seq}"
+      IPAddress: "192.168.{cpe}.1{seq:02}"
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `path` | string | yes | Table-template prefix (no trailing `.`, no `{i}`). Must be registered via `objects:[]`. |
+| `type` | string | no | Metadata in v0 (`wifiStation` / `lanHost` / `generic`). Recommended for logs; does not change Tick semantics. |
+| `targetCount` | int | yes | Steady-state row count. Fabricator drives the table toward this; at `delta == 0` the Tick is a no-op (v0 is quiet at steady state). |
+| `churnInterval` | duration | yes | Tick cadence (Go duration syntax, e.g. `30s`, `5m`). ±10% jitter applied. |
+| `churnRate` | int | yes (>0) | Max rows added OR removed per tick. Initial fill warms over `target / churnRate` ticks. |
+| `rowDefaults` | map[string]string | no | Per-leaf templates applied to each new row. Keys must exist as leaves in the table template. |
+
+**Placeholder grammar in `rowDefaults` values:**
+
+- `{seq}` — decimal new-instance number
+- `{seq:NN}` — decimal zero-padded to `NN` digits
+- `{seq:hex:NN}` — lowercase hex zero-padded
+- `{seq:HEX:NN}` — uppercase hex zero-padded
+- Existing fleet placeholders (`{cpe}`, `{cpe:NN}`, `{cpe:MAC:N}`, `{cpe:hex:N}`, `{<pool>}`) are pre-resolved per CPE before fabricator startup.
 
 ## `fleet`
 
