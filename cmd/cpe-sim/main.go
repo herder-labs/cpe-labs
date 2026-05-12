@@ -37,10 +37,12 @@ import (
 	"github.com/herder-labs/cpe-labs/internal/cwmp/transport"
 	"github.com/herder-labs/cpe-labs/internal/generators"
 	"github.com/herder-labs/cpe-labs/internal/paramtree"
+	usphandlers "github.com/herder-labs/cpe-labs/internal/usp/handlers"
 	"github.com/herder-labs/cpe-labs/internal/usp/identity"
 	"github.com/herder-labs/cpe-labs/internal/usp/mtp"
 	mqttmtp "github.com/herder-labs/cpe-labs/internal/usp/mtp/mqtt"
 	"github.com/herder-labs/cpe-labs/internal/usp/notify"
+	uspcodec "github.com/herder-labs/cpe-labs/internal/usp/codec"
 	uspsession "github.com/herder-labs/cpe-labs/internal/usp/session"
 	"github.com/herder-labs/cpe-labs/internal/version"
 )
@@ -672,13 +674,11 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 	}
 
 	// pendingCancels holds the cancel funcs for in-flight scheduled
-	// reboot / factory-reset deliveries. Both write paths run under
-	// sessionMu (handler invocation holds it; scheduler.ScheduleOnce
-	// re-acquires it before invoking its fn) so no extra lock needed.
-	pendingCancels := &struct {
-		reboot       func()
-		factoryReset func()
-	}{}
+	// reboot / factory-reset / usp-reboot deliveries. Both write paths
+	// run under sessionMu (handler invocation holds it; scheduler.
+	// ScheduleOnce re-acquires it before invoking its fn) so no extra
+	// lock needed.
+	pendingCancels := &pendingScheduledCancels{}
 
 	var scheduleReboot handlers.RebootSchedule
 	if prof.EventSchedule.RebootDelay > 0 {
@@ -813,17 +813,30 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 			return nil, fmt.Errorf("usp mqtt adapter: %w", mErr)
 		}
 		uspAdapter = adapter
+		uspLogger := in.logger.With("cpe_id", in.id, "role", "usp")
+		objectCreate := buildUSPObjectCreate(adapter, agentEID, prof.USP.ControllerEndpointID, uspLogger)
+		objectDelete := buildUSPObjectDelete(adapter, agentEID, prof.USP.ControllerEndpointID, uspLogger)
+		uspReboot := buildUSPRebootCallback(in.sched, in.id, prof.Tree, prof.EventSchedule.RebootDelay,
+			adapter, agentEID, prof.USP.ControllerEndpointID, pendingCancels, uspLogger)
+
 		uspOpts = &uspsession.Options{
-			Tree:             prof.Tree,
-			Adapter:          adapter,
-			AgentEID:         agentEID,
-			ControllerEID:    prof.USP.ControllerEndpointID,
-			OnBoardBuilder:   &notify.OnBoardRequestBuilder{
+			Tree:          prof.Tree,
+			Adapter:       adapter,
+			AgentEID:      agentEID,
+			ControllerEID: prof.USP.ControllerEndpointID,
+			OnBoardBuilder: &notify.OnBoardRequestBuilder{
 				OUIPath:    prof.USP.EndpointID.OUIPath,
 				SerialPath: prof.USP.EndpointID.SerialPath,
 			},
 			BootEventBuilder: &notify.BootEventBuilder{},
-			Logger:           in.logger.With("cpe_id", in.id, "role", "usp"),
+			Handlers: []uspsession.Handler{
+				usphandlers.NewGet(prof.Tree),
+				usphandlers.NewSet(prof.Tree, valueChange),
+				usphandlers.NewAdd(prof.Tree, prof.UniqueKeys, valueChange, objectCreate),
+				usphandlers.NewDelete(prof.Tree, objectDelete),
+				usphandlers.NewOperate(uspReboot),
+			},
+			Logger: uspLogger,
 		}
 	}
 
@@ -1083,6 +1096,7 @@ func buildTransferScheduler(sched *scheduler.Scheduler, cpeID string, tracker *c
 type pendingScheduledCancels = struct {
 	reboot       func()
 	factoryReset func()
+	uspReboot    func()
 }
 
 // buildRebootScheduler returns a handlers.RebootSchedule that defers
@@ -1262,4 +1276,79 @@ func hasVersionFlag(args []string) bool {
 		}
 	}
 	return false
+}
+
+func buildUSPObjectCreate(adapter mtp.Adapter, agentEID, controllerEID string, logger *slog.Logger) func(string, map[string]string) {
+	builder := &notify.ObjectCreationBuilder{}
+	return func(objPath string, uniqueKeys map[string]string) {
+		msg, err := builder.Build(objPath, uniqueKeys)
+		if err != nil {
+			logger.Warn("usp object-creation build failed", "obj_path", objPath, "err", err.Error())
+			return
+		}
+		wire, err := uspcodec.WrapMessage(msg, agentEID, controllerEID)
+		if err != nil {
+			logger.Warn("usp object-creation wrap failed", "err", err.Error())
+			return
+		}
+		if err := adapter.Send(context.Background(), wire); err != nil {
+			logger.Warn("usp object-creation send failed", "err", err.Error())
+			return
+		}
+		logger.Info("usp ObjectCreation notify sent", "obj_path", objPath, "unique_keys", uniqueKeys)
+	}
+}
+
+func buildUSPObjectDelete(adapter mtp.Adapter, agentEID, controllerEID string, logger *slog.Logger) func(string) {
+	builder := &notify.ObjectDeletionBuilder{}
+	return func(objPath string) {
+		msg, err := builder.Build(objPath)
+		if err != nil {
+			logger.Warn("usp object-deletion build failed", "obj_path", objPath, "err", err.Error())
+			return
+		}
+		wire, err := uspcodec.WrapMessage(msg, agentEID, controllerEID)
+		if err != nil {
+			logger.Warn("usp object-deletion wrap failed", "err", err.Error())
+			return
+		}
+		if err := adapter.Send(context.Background(), wire); err != nil {
+			logger.Warn("usp object-deletion send failed", "err", err.Error())
+			return
+		}
+		logger.Info("usp ObjectDeletion notify sent", "obj_path", objPath)
+	}
+}
+
+func buildUSPRebootCallback(sched *scheduler.Scheduler, cpeID string, tree *paramtree.Tree, delay time.Duration, adapter mtp.Adapter, agentEID, controllerEID string, cancels *pendingScheduledCancels, logger *slog.Logger) func() {
+	bootBuilder := &notify.BootEventBuilder{}
+	return func() {
+		if err := tree.SetSystem(uspsession.RebootCausePath, uspsession.RebootCauseLocalBoot); err != nil {
+			logger.Warn("usp reboot: flip Internal.Reboot.Cause failed", "err", err.Error())
+		}
+		if cancels.uspReboot != nil {
+			logger.Debug("usp scheduled reboot superseded by new RPC", "cpe_id", cpeID)
+			cancels.uspReboot()
+			cancels.uspReboot = nil
+		}
+		logger.Debug("usp reboot scheduled", "cpe_id", cpeID, "delay", delay.String())
+		cancels.uspReboot = sched.ScheduleOnce(cpeID+":usp-reboot", delay, func(_ context.Context) error {
+			msg, err := bootBuilder.Build(tree)
+			if err != nil {
+				logger.Warn("usp boot event build failed", "err", err.Error())
+				return err
+			}
+			wire, err := uspcodec.WrapMessage(msg, agentEID, controllerEID)
+			if err != nil {
+				logger.Warn("usp boot event wrap failed", "err", err.Error())
+				return err
+			}
+			if err := adapter.Send(context.Background(), wire); err != nil {
+				logger.Warn("usp boot event send failed", "err", err.Error())
+				return err
+			}
+			logger.Info("usp Event{Boot!} notify sent after reboot", "cpe_id", cpeID)
+			return nil
+		})
+	}
 }
