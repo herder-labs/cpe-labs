@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/herder-labs/cpe-labs/internal/cpeerr"
@@ -26,6 +27,7 @@ type Options struct {
 	ControllerEID    string
 	OnBoardBuilder   *notify.OnBoardRequestBuilder
 	BootEventBuilder *notify.BootEventBuilder
+	Handlers         []Handler
 	Logger           *slog.Logger
 }
 
@@ -46,6 +48,11 @@ func Run(ctx context.Context, opts Options) error {
 		bootBuilder = &notify.BootEventBuilder{}
 	}
 
+	dispatch := make(map[uspproto.Header_MsgType]Handler, len(opts.Handlers))
+	for _, h := range opts.Handlers {
+		dispatch[h.MsgType()] = h
+	}
+
 	if err := opts.Adapter.Connect(ctx); err != nil {
 		return err
 	}
@@ -53,7 +60,7 @@ func Run(ctx context.Context, opts Options) error {
 	recvDone := make(chan struct{})
 	go func() {
 		defer close(recvDone)
-		runRecv(ctx, opts.Adapter.Recv(), logger)
+		runRecv(ctx, opts, dispatch, logger)
 	}()
 
 	if err := emitFirstContact(ctx, opts, onBoardBuilder, bootBuilder, logger); err != nil {
@@ -110,7 +117,8 @@ func emitFirstContact(ctx context.Context, opts Options, onBoard *notify.OnBoard
 	return nil
 }
 
-func runRecv(ctx context.Context, ch <-chan []byte, logger *slog.Logger) {
+func runRecv(ctx context.Context, opts Options, dispatch map[uspproto.Header_MsgType]Handler, logger *slog.Logger) {
+	ch := opts.Adapter.Recv()
 	for {
 		select {
 		case <-ctx.Done():
@@ -119,17 +127,63 @@ func runRecv(ctx context.Context, ch <-chan []byte, logger *slog.Logger) {
 			if !ok {
 				return
 			}
-			record, msg, err := codec.UnwrapRecord(b)
-			if err != nil {
-				logger.Warn("usp recv decode failed", "err", err, "bytes", len(b))
-				continue
-			}
-			logger.Info("usp recv",
-				"msg_id", msg.GetHeader().GetMsgId(),
-				"msg_type", msg.GetHeader().GetMsgType().String(),
-				"from_id", record.GetFromId(),
-			)
+			handleInbound(ctx, opts, dispatch, b, logger)
 		}
+	}
+}
+
+func handleInbound(ctx context.Context, opts Options, dispatch map[uspproto.Header_MsgType]Handler, b []byte, logger *slog.Logger) {
+	record, req, err := codec.UnwrapRecord(b)
+	if err != nil {
+		logger.Warn("usp recv decode failed", "err", err.Error(), "bytes", len(b))
+		return
+	}
+	reqHeader := req.GetHeader()
+	logger.Debug("usp recv",
+		"msg_id", reqHeader.GetMsgId(),
+		"msg_type", reqHeader.GetMsgType().String(),
+		"from_id", record.GetFromId(),
+	)
+
+	handler, ok := dispatch[reqHeader.GetMsgType()]
+	if !ok {
+		resp := buildErrorMsg(reqHeader.GetMsgId(), USPErrMessageFailed,
+			fmt.Sprintf("Message failed: msg_type %s not supported", reqHeader.GetMsgType()))
+		sendResponse(ctx, opts, record, resp, logger)
+		return
+	}
+
+	resp, herr := handler.Handle(ctx, req)
+	if herr != nil {
+		code := uint32(USPErrMessageFailed)
+		var ce *cpeerr.Error
+		if errors.As(herr, &ce) && ce.FaultCode != 0 {
+			code = uint32(ce.FaultCode)
+		}
+		resp = buildErrorMsg(reqHeader.GetMsgId(), code, herr.Error())
+	}
+	if resp == nil {
+		logger.Warn("usp handler returned nil response with no error", "msg_type", reqHeader.GetMsgType().String())
+		return
+	}
+	if resp.GetHeader() == nil {
+		resp.Header = &uspproto.Header{}
+	}
+	if resp.GetHeader().GetMsgId() == "" {
+		resp.Header.MsgId = reqHeader.GetMsgId()
+	}
+	sendResponse(ctx, opts, record, resp, logger)
+}
+
+func sendResponse(ctx context.Context, opts Options, reqRecord *uspproto.Record, resp *uspproto.Msg, logger *slog.Logger) {
+	wire, err := codec.WrapMessage(resp, opts.AgentEID, reqRecord.GetFromId())
+	if err != nil {
+		logger.Warn("usp wrap response failed", "err", err.Error())
+		return
+	}
+	if err := opts.Adapter.Send(ctx, wire); err != nil {
+		logger.Warn("usp send response failed", "err", err.Error())
+		return
 	}
 }
 
@@ -159,6 +213,6 @@ func readRebootCause(tree *paramtree.Tree) (string, error) {
 
 func closeAdapter(a mtp.Adapter, logger *slog.Logger) {
 	if err := a.Close(); err != nil {
-		logger.Warn("usp adapter close", "err", err)
+		logger.Warn("usp adapter close", "err", err.Error())
 	}
 }
