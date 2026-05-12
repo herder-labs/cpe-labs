@@ -73,8 +73,45 @@ The sections below describe the longer-term USP architecture cpe-labs is buildin
 
 - CLI flags like `--usp-mtp=*`, `--usp-mqtt-addr=*`, `--usp-ws-url=*`, `--usp-stomp-addr=*` are **not yet implemented**. All USP knobs go through the profile's `usp:` block.
 - WebSocket and STOMP MTPs are not yet implemented.
-- Subscription-driven Notify (Periodic / ValueChange / ObjectCreation / ObjectDeletion / OperationComplete) is the Notify Emission and Subscription Table epics' work.
-- Request handlers (`Get` / `Set` / `Add` / `Delete` / `Operate` / `GetInstances` / `GetSupportedDM`) are the Request Handlers epic.
+- Request handlers `Get`, `Set`, `Add`, `Delete`, `Operate(Device.Reboot())` **are implemented** as of Bundle 1. `GetInstances`, `GetSupportedDM`, async-Request `Operate`, and `Operate(Device.FactoryReset())` remain.
+- Autonomous `Notify(ObjectCreation)` and `Notify(ObjectDeletion)` **are implemented** as of Bundle 1; they fire unconditionally after the matching Add/Delete handler succeeds. Subscription-gated emission lands with the Subscription Table epic.
+- `Notify(ValueChange)`, `Notify(Periodic)`, and Subscription Table reconciliation remain (epics #5 / #6).
+
+## Request handlers (Bundle 1)
+
+The agent dispatches inbound USP messages by `Header.msg_type`. Five handlers ship today:
+
+| Message | Behavior |
+| --- | --- |
+| `Get` | Returns `GetResp` with one `RequestedPathResult` per requested path (input order preserved). Per-path `err_code: 7026` on unknown paths does not fail the rest. v0 supports concrete scalar paths only; wildcards and object-walk are documented follow-ups. |
+| `Set` | Atomic via `Tree.SetBatch`. `allow_partial: false` rolls back on any failure with per-param `ParameterError`. `allow_partial: true` returns `Error: 7008` in v0 (the reference controller hardcodes `false`). Wires the shared `valueChange` callback so generators / SPV consumers see the same write events. |
+| `Add` | Allocates a new instance, applies `param_settings`, populates `unique_keys` from the profile's `objects[].uniqueKeys` declarations. SetBatch failure rolls back the just-created instance. Emits an autonomous `Notify(ObjectCreation)` with matching `unique_keys`. |
+| `Delete` | Deletes the instance, returns `affected_paths`. Missing instance returns `err_code: 7404` (Object does not exist). Paths without trailing `.` return `7026`. Emits an autonomous `Notify(ObjectDeletion)` with the deleted prefix. |
+| `Operate(Device.Reboot())` | Synchronous `OperateResp` (req_output_args empty); flips `Internal.Reboot.Cause` to `LocalReboot` and schedules `Event{Boot!}` Notify after `eventSchedule.rebootDelay` (default 0 = immediate). Repeat reboots supersede the in-flight schedule. Unknown commands return `cmd_failure: 7022`. |
+
+Unmapped message types (`GetInstances`, `GetSupportedDM`, etc.) return an `Error` Msg with `err_code: 7000`, msg_id echoed. The agent dispatch table never silently drops a request.
+
+## Multi-instance objects: `uniqueKeys`
+
+For Add to return useful `unique_keys` (and ObjectCreation Notifies to be meaningful to the controller), the profile must declare each multi-instance object's unique-key sets:
+
+```yaml
+objects:
+  - path: Device.WiFi.SSID
+    instances: 1
+    uniqueKeys:
+      - [SSID]            # one set, single param
+      - [BSSID]           # another set, single param
+    parameters:
+      - path: SSID
+        ...
+```
+
+Each entry under `uniqueKeys` is a key-set (a list of parameter names relative to the object). cpe-labs reads the matching leaves under the newly-instantiated instance to populate the AddResp / ObjectCreation `unique_keys` map. Omitting the block produces an empty `unique_keys` map; the controller falls back to identifying instances by `instantiated_path` alone. See [profile-yaml.md](../reference/profile-yaml.md#usp) for the full schema.
+
+## Subscription-driven Notify (forward-looking)
+
+Most of the future content below describes work that is not yet implemented; see the open issues for `GetSupportedDM`, `GetInstances`, the Subscription Table, and the autonomous-Notify evaluator.
 
 ## Architectural fit
 
