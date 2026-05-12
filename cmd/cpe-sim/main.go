@@ -42,8 +42,8 @@ import (
 	"github.com/herder-labs/cpe-labs/internal/usp/mtp"
 	mqttmtp "github.com/herder-labs/cpe-labs/internal/usp/mtp/mqtt"
 	"github.com/herder-labs/cpe-labs/internal/usp/notify"
-	uspcodec "github.com/herder-labs/cpe-labs/internal/usp/codec"
 	uspsession "github.com/herder-labs/cpe-labs/internal/usp/session"
+	"github.com/herder-labs/cpe-labs/internal/usp/subscription"
 	"github.com/herder-labs/cpe-labs/internal/version"
 )
 
@@ -78,8 +78,9 @@ type cpeStack struct {
 	genRunner    *generators.Runner
 	hasScheduler bool
 
-	uspAdapter mtp.Adapter            // nil when USP disabled
-	uspOpts    *uspsession.Options    // nil when USP disabled
+	uspAdapter    mtp.Adapter             // nil when USP disabled
+	uspOpts       *uspsession.Options     // nil when USP disabled
+	uspEvaluator  *subscription.Evaluator // nil when USP disabled
 }
 
 func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
@@ -305,6 +306,25 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 		"event_schedule", eventScheduleRequiresDaemon,
 		"usp", hasAnyUSP,
 	)
+
+	for _, st := range stacks {
+		if st.uspEvaluator == nil {
+			continue
+		}
+		if err := st.uspEvaluator.Start(signalCtx); err != nil {
+			logger.Warn("usp evaluator start failed", "cpe_id", st.id, "err", err.Error())
+		}
+	}
+	defer func() {
+		for _, st := range stacks {
+			if st.uspEvaluator == nil {
+				continue
+			}
+			shutdownCtx, cancelStop := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = st.uspEvaluator.Stop(shutdownCtx)
+			cancelStop()
+		}
+	}()
 
 	var uspWG sync.WaitGroup
 	for _, st := range stacks {
@@ -690,11 +710,18 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 	}
 
 	hasScheduler := !prof.PeriodicInformPaths.IsZero()
+	var evaluator *subscription.Evaluator
 	valueChange := func(path string) {
 		tracker.RecordValueChange(path)
 		if hasScheduler &&
 			(path == prof.PeriodicInformPaths.Interval || path == prof.PeriodicInformPaths.Enable) {
 			in.sched.OnIntervalChange(in.id)
+		}
+		if evaluator != nil {
+			v, err := prof.Tree.Get(path)
+			if err == nil {
+				evaluator.NotifyValueChange(path, v.Raw)
+			}
 		}
 	}
 
@@ -814,10 +841,13 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 		}
 		uspAdapter = adapter
 		uspLogger := in.logger.With("cpe_id", in.id, "role", "usp")
-		objectCreate := buildUSPObjectCreate(adapter, agentEID, prof.USP.ControllerEndpointID, uspLogger)
-		objectDelete := buildUSPObjectDelete(adapter, agentEID, prof.USP.ControllerEndpointID, uspLogger)
+
+		evaluator = subscription.New(prof.Tree, adapter, agentEID, prof.USP.ControllerEndpointID, in.sched, in.id, in.rngSource.ForCPE(in.id+":usp-subs"), uspLogger)
+
+		objectCreate := func(path string, keys map[string]string) { evaluator.NotifyObjectCreated(path, keys) }
+		objectDelete := func(path string) { evaluator.NotifyObjectDeleted(path) }
 		uspReboot := buildUSPRebootCallback(in.sched, in.id, prof.Tree, prof.EventSchedule.RebootDelay,
-			adapter, agentEID, prof.USP.ControllerEndpointID, pendingCancels, uspLogger)
+			evaluator, pendingCancels, uspLogger)
 
 		uspOpts = &uspsession.Options{
 			Tree:          prof.Tree,
@@ -831,6 +861,8 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 			BootEventBuilder: &notify.BootEventBuilder{},
 			Handlers: []uspsession.Handler{
 				usphandlers.NewGet(prof.Tree),
+				usphandlers.NewGetInstances(prof.Tree, prof.UniqueKeys),
+				usphandlers.NewGetSupportedDM(prof.Tree, prof.UniqueKeys, ""),
 				usphandlers.NewSet(prof.Tree, valueChange),
 				usphandlers.NewAdd(prof.Tree, prof.UniqueKeys, valueChange, objectCreate),
 				usphandlers.NewDelete(prof.Tree, objectDelete),
@@ -853,6 +885,7 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 		hasScheduler: hasScheduler,
 		uspAdapter:   uspAdapter,
 		uspOpts:      uspOpts,
+		uspEvaluator: evaluator,
 	}, nil
 }
 
@@ -1278,50 +1311,7 @@ func hasVersionFlag(args []string) bool {
 	return false
 }
 
-func buildUSPObjectCreate(adapter mtp.Adapter, agentEID, controllerEID string, logger *slog.Logger) func(string, map[string]string) {
-	builder := &notify.ObjectCreationBuilder{}
-	return func(objPath string, uniqueKeys map[string]string) {
-		msg, err := builder.Build(objPath, uniqueKeys)
-		if err != nil {
-			logger.Warn("usp object-creation build failed", "obj_path", objPath, "err", err.Error())
-			return
-		}
-		wire, err := uspcodec.WrapMessage(msg, agentEID, controllerEID)
-		if err != nil {
-			logger.Warn("usp object-creation wrap failed", "err", err.Error())
-			return
-		}
-		if err := adapter.Send(context.Background(), wire); err != nil {
-			logger.Warn("usp object-creation send failed", "err", err.Error())
-			return
-		}
-		logger.Info("usp ObjectCreation notify sent", "obj_path", objPath, "unique_keys", uniqueKeys)
-	}
-}
-
-func buildUSPObjectDelete(adapter mtp.Adapter, agentEID, controllerEID string, logger *slog.Logger) func(string) {
-	builder := &notify.ObjectDeletionBuilder{}
-	return func(objPath string) {
-		msg, err := builder.Build(objPath)
-		if err != nil {
-			logger.Warn("usp object-deletion build failed", "obj_path", objPath, "err", err.Error())
-			return
-		}
-		wire, err := uspcodec.WrapMessage(msg, agentEID, controllerEID)
-		if err != nil {
-			logger.Warn("usp object-deletion wrap failed", "err", err.Error())
-			return
-		}
-		if err := adapter.Send(context.Background(), wire); err != nil {
-			logger.Warn("usp object-deletion send failed", "err", err.Error())
-			return
-		}
-		logger.Info("usp ObjectDeletion notify sent", "obj_path", objPath)
-	}
-}
-
-func buildUSPRebootCallback(sched *scheduler.Scheduler, cpeID string, tree *paramtree.Tree, delay time.Duration, adapter mtp.Adapter, agentEID, controllerEID string, cancels *pendingScheduledCancels, logger *slog.Logger) func() {
-	bootBuilder := &notify.BootEventBuilder{}
+func buildUSPRebootCallback(sched *scheduler.Scheduler, cpeID string, tree *paramtree.Tree, delay time.Duration, evaluator *subscription.Evaluator, cancels *pendingScheduledCancels, logger *slog.Logger) func() {
 	return func() {
 		if err := tree.SetSystem(uspsession.RebootCausePath, uspsession.RebootCauseLocalBoot); err != nil {
 			logger.Warn("usp reboot: flip Internal.Reboot.Cause failed", "err", err.Error())
@@ -1333,21 +1323,7 @@ func buildUSPRebootCallback(sched *scheduler.Scheduler, cpeID string, tree *para
 		}
 		logger.Debug("usp reboot scheduled", "cpe_id", cpeID, "delay", delay.String())
 		cancels.uspReboot = sched.ScheduleOnce(cpeID+":usp-reboot", delay, func(_ context.Context) error {
-			msg, err := bootBuilder.Build(tree)
-			if err != nil {
-				logger.Warn("usp boot event build failed", "err", err.Error())
-				return err
-			}
-			wire, err := uspcodec.WrapMessage(msg, agentEID, controllerEID)
-			if err != nil {
-				logger.Warn("usp boot event wrap failed", "err", err.Error())
-				return err
-			}
-			if err := adapter.Send(context.Background(), wire); err != nil {
-				logger.Warn("usp boot event send failed", "err", err.Error())
-				return err
-			}
-			logger.Info("usp Event{Boot!} notify sent after reboot", "cpe_id", cpeID)
+			evaluator.FireEvent("Device.Boot!")
 			return nil
 		})
 	}

@@ -155,7 +155,13 @@ usp:
 		t.Fatalf("Set did not succeed: %+v", setResp.GetBody().GetResponse().GetSetResp())
 	}
 
-	// 4. Add Device.WiFi.SSID. -> AddResp + autonomous ObjectCreation.
+	// 4. Install ObjectCreation Subscription on Device.WiFi.SSID. so the
+	// evaluator (Bundle 2) emits ObjectCreation on Add. Bundle 2 makes
+	// these notifies Subscription-gated; Bundle 1 alone emitted them
+	// unconditionally.
+	installSubscription(t, hub, agentEID, controllerEID, "msg-sub-oc", "ObjectCreation", "Device.WiFi.SSID.")
+
+	// Add Device.WiFi.SSID. -> AddResp + autonomous ObjectCreation.
 	addResp := hub.send(t, agentEID, controllerEID, "msg-add", uspproto.Header_ADD, &uspproto.Body{
 		MsgBody: &uspproto.Body_Request{Request: &uspproto.Request{
 			ReqType: &uspproto.Request_Add{Add: &uspproto.Add{
@@ -187,7 +193,11 @@ usp:
 		t.Errorf("ObjectCreation unique_keys[SSID]=%q", objCreation.GetObjCreation().GetUniqueKeys()["SSID"])
 	}
 
-	// 5. Delete the just-added instance -> DeleteResp + autonomous
+	// 5. Install ObjectDeletion Subscription. Same evaluator-gating
+	// requirement.
+	installSubscription(t, hub, agentEID, controllerEID, "msg-sub-od", "ObjectDeletion", "Device.WiFi.SSID.")
+
+	// Delete the just-added instance -> DeleteResp + autonomous
 	// ObjectDeletion.
 	delResp := hub.send(t, agentEID, controllerEID, "msg-del", uspproto.Header_DELETE, &uspproto.Body{
 		MsgBody: &uspproto.Body_Request{Request: &uspproto.Request{
@@ -203,6 +213,11 @@ usp:
 		return n.GetObjDeletion() != nil && n.GetObjDeletion().GetObjPath() == addedPath
 	})
 	_ = objDeletion
+
+	// Restore the default-seed Subscription to Event/Boot! so the
+	// Reboot test below sees a matching subscription for Boot!. The
+	// previous installSubscription overrode the row.
+	installSubscription(t, hub, agentEID, controllerEID, "msg-sub-restore", "Event", "Device.Boot!")
 
 	// 6. Operate(Device.Reboot()) -> OperateResp + Event{Boot!}.
 	opResp := hub.send(t, agentEID, controllerEID, "msg-op", uspproto.Header_OPERATE, &uspproto.Body{
@@ -238,13 +253,11 @@ usp:
 		t.Errorf("Unknown command err_code=%v want 7022 (cmd_failure=%+v)", fail, fail)
 	}
 
-	// 8. Unmapped msg type (GetInstances, which Bundle 2 implements)
+	// 8. Unmapped msg type (Register, which neither Bundle 1 nor 2 implements)
 	// returns Error 7000.
-	errResp := hub.send(t, agentEID, controllerEID, "msg-unmapped", uspproto.Header_GET_INSTANCES, &uspproto.Body{
+	errResp := hub.send(t, agentEID, controllerEID, "msg-unmapped", uspproto.Header_REGISTER, &uspproto.Body{
 		MsgBody: &uspproto.Body_Request{Request: &uspproto.Request{
-			ReqType: &uspproto.Request_GetInstances{GetInstances: &uspproto.GetInstances{
-				ObjPaths: []string{"Device.WiFi.SSID."},
-			}},
+			ReqType: &uspproto.Request_Register{Register: &uspproto.Register{}},
 		}},
 	}, 3*time.Second)
 	if errResp.GetHeader().GetMsgType() != uspproto.Header_ERROR {
@@ -376,4 +389,31 @@ func (h *controllerHub) disconnect() {
 	h.disconned = true
 	h.mu.Unlock()
 	h.client.Disconnect(250)
+}
+
+// installSubscription overrides the default-seed Subscription row (.1.)
+// to match the (notifType, referenceList) combination needed for a
+// later test assertion. Waits 100ms for the evaluator's debounced
+// index rebuild. Bundle 1 originally emitted ObjectCreation/Deletion
+// unconditionally; with the Bundle 2 evaluator in place, gating means
+// the test must install a matching Subscription first.
+func installSubscription(t *testing.T, hub *controllerHub, agentEID, controllerEID, msgID, notifType, referenceList string) {
+	t.Helper()
+	resp := hub.send(t, agentEID, controllerEID, msgID, uspproto.Header_SET, &uspproto.Body{
+		MsgBody: &uspproto.Body_Request{Request: &uspproto.Request{
+			ReqType: &uspproto.Request_Set{Set: &uspproto.Set{
+				UpdateObjs: []*uspproto.Set_UpdateObject{{
+					ObjPath: "Device.LocalAgent.Subscription.1.",
+					ParamSettings: []*uspproto.Set_UpdateParamSetting{
+						{Param: "NotifType", Value: notifType, Required: true},
+						{Param: "ReferenceList", Value: referenceList, Required: true},
+					},
+				}},
+			}},
+		}},
+	}, 3*time.Second)
+	if resp.GetBody().GetResponse().GetSetResp().GetUpdatedObjResults()[0].GetOperStatus().GetOperSuccess() == nil {
+		t.Fatalf("install subscription failed: %+v", resp)
+	}
+	time.Sleep(120 * time.Millisecond)
 }
