@@ -278,6 +278,45 @@ All three fields are optional. Zero / unset preserves the simulator's existing i
 
 `rebootDelay > 0` or `factoryResetDelay > 0` keeps the process alive long enough for the deferred Inform to fire (daemon mode). `bootDelay` alone preserves one-shot mode (the deferred bootstrap fires, then the process exits).
 
+## `usp`
+
+Turns the TR-369 USP role on for this CPE. When `enable: true`, cpe-labs builds an MQTT 3.1.1 transport adapter next to the existing CWMP session, derives an `os::<OUI><Serial>` endpoint ID from the profile, and emits a `Notify(OnBoardRequest)` on first contact so the controller materializes a device row. Subsequent in-process boots emit `Notify(Event{event_name: "Boot!"})` instead.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `enable` | bool | Turns the USP agent on for this device. Default `false`. |
+| `endpointID.scheme` | string | TR-369 §2.2 R-ARC.2a authority scheme. Default `os`. Accepted: `oui` / `cid` / `pen` / `self` / `user` / `os` / `ops` / `uuid` / `imei` / `proto` / `doc` / `fqdn`. |
+| `endpointID.ouiPath` | tree path | Leaf carrying the manufacturer OUI. Default `Device.DeviceInfo.ManufacturerOUI`. Must resolve to a `xsd:string` leaf in the merged tree. |
+| `endpointID.serialPath` | tree path | Leaf carrying the device serial. Default `Device.DeviceInfo.SerialNumber`. Same type constraint. |
+| `controllerEndpointID` | string | TR-369 endpoint ID of the controller. Default `self::openacs`. Must contain `::` (full TR-369 §2.2 validation runs at session startup). |
+| `broker.address` | string | MQTT broker host. **Required when `enable: true`.** |
+| `broker.port` | int | MQTT broker TCP port. Default `1883`. |
+| `broker.protocolVersion` | string | Locked to `"3.1.1"` in v0. The NATS-native broker bridged by the reference controller does not implement MQTT 5.0. |
+| `broker.username` | string | Broker auth username. Empty for anonymous (Phase A posture). |
+| `broker.password` | string | Broker auth password. Empty for anonymous. |
+| `broker.keepAliveSeconds` | int | MQTT KEEPALIVE. Default `60`. |
+| `broker.cleanSession` | bool | MQTT CleanSession flag. Default `true`. |
+| `dataModels` | []string | Data-model URIs this device supports. Default `[device]`. Advisory in v0; consumed when `GetSupportedDM` lands. |
+
+```yaml
+usp:
+  enable: true
+  endpointID:
+    scheme: os
+    ouiPath: Device.DeviceInfo.ManufacturerOUI
+    serialPath: Device.DeviceInfo.SerialNumber
+  controllerEndpointID: "self::openacs"
+  broker:
+    address: nats
+    port: 1883
+    protocolVersion: "3.1.1"
+    keepAliveSeconds: 60
+    cleanSession: true
+  dataModels: [device]
+```
+
+When `enable: true`, cpe-labs installs an `Internal.Reboot.Cause` system leaf (read-only `xsd:string`, initial value `LocalFactoryReset`). The session reads it to decide between `OnBoardRequest` (first contact) and `Event{Boot!}` (subsequent boots), then flips it to `LocalReboot` after the OnBoardRequest emission. Process restart resets the leaf back to `LocalFactoryReset` because `LoadProfile` rebuilds the tree from scratch (restart-as-factory-reset, v0 semantics).
+
 ## Strict load-time validation
 
 The loader rejects loudly. Every error names the source file and offending key:
@@ -292,6 +331,10 @@ The loader rejects loudly. Every error names the source file and offending key:
 - `fleet.pools` with a CIDR that doesn't parse, an IPv6 prefix length lower than the super-prefix length, or capacity smaller than `fleet.count`.
 - Generators on the wrong leaf type (counter on a string, drift on an unsigned int).
 - Two generators targeting the same path (top-level + inline on the same leaf).
-- Two profile files in directory mode declaring the same singleton block (`fleet`, `transfer`, `connectionRequest`, `periodicInformPaths`, `deviceIdPaths`).
+- Two profile files in directory mode declaring the same singleton block (`fleet`, `transfer`, `connectionRequest`, `periodicInformPaths`, `deviceIdPaths`, `usp`).
+- `usp.enable: true` with no `broker.address`.
+- `usp.broker.protocolVersion` other than `"3.1.1"`.
+- `usp.controllerEndpointID` without a `::` separator.
+- `usp.endpointID.ouiPath` / `serialPath` referencing leaves that don't exist or aren't `xsd:string`.
 
 Fail-fast at load beats per-CPE failure mid-bootstrap.

@@ -12,7 +12,7 @@ LDFLAGS := -X $(MODULE)/internal/version.Version=$(VERSION) \
            -X $(MODULE)/internal/version.Commit=$(COMMIT) \
            -X $(MODULE)/internal/version.Date=$(DATE)
 
-.PHONY: all build test test-race lint fmt vet tidy clean
+.PHONY: all build test test-race lint fmt vet tidy clean proto-gen
 
 all: build
 
@@ -40,3 +40,10 @@ tidy:
 
 clean:
 	rm -rf $(BIN_DIR) coverage.out coverage.html
+
+proto-gen:
+	@command -v protoc >/dev/null 2>&1 || { echo "protoc not installed"; exit 1; }
+	@command -v protoc-gen-go >/dev/null 2>&1 || { echo "protoc-gen-go not installed (go install google.golang.org/protobuf/cmd/protoc-gen-go@latest)"; exit 1; }
+	protoc --go_out=. --go_opt=paths=source_relative \
+	    internal/usp/codec/proto/usp_msg.proto \
+	    internal/usp/codec/proto/usp_record.proto

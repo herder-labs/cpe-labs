@@ -4,6 +4,78 @@ cpe-labs speaks **TR-369 (USP)** alongside TR-069. Same simulator, same vendor p
 
 This page covers the USP-side surface: how the Agent connects to a Controller, which MTPs are supported, and how Subscribe / Notify drives outbound traffic.
 
+!!! info "v0 ships a foundation, not the full surface"
+    Today the USP role is configured via a top-level `usp:` block in the **profile YAML**, not via CLI flags. MQTT 3.1.1 is the only MTP that ships; WebSocket and STOMP are forward-looking. Subscribe / Notify reconciliation, request handlers (Get / Set / Add / Delete / Operate / GetInstances / GetSupportedDM), and broader Notify variants are tracked in follow-up Phase 3 epics. Sections below that show `--usp-*` CLI flags or describe Subscription-driven notification describe the **forward design**; jump to the [v0 quickstart](#v0-quickstart) for the surface that actually ships today.
+
+## v0 quickstart
+
+The minimum profile to register a single simulated CPE with a USP controller is one `usp:` block on top of the existing `Device.DeviceInfo.*` and `deviceIdPaths` declarations:
+
+```yaml
+deviceIdPaths:
+  manufacturer: Device.DeviceInfo.Manufacturer
+  oui:          Device.DeviceInfo.ManufacturerOUI
+  productClass: Device.DeviceInfo.ProductClass
+  serialNumber: Device.DeviceInfo.SerialNumber
+
+parameters:
+  - path: Device.DeviceInfo.Manufacturer
+    value: "ACME"
+  - path: Device.DeviceInfo.ManufacturerOUI
+    value: "AABBCC"
+  - path: Device.DeviceInfo.ProductClass
+    value: "GenericGateway"
+  - path: Device.DeviceInfo.SerialNumber
+    value: "GATEWAY-0001"
+
+usp:
+  enable: true
+  broker:
+    address: nats
+    port: 1883
+    protocolVersion: "3.1.1"
+```
+
+Run:
+
+```bash
+bin/cpe-sim --profile=profile.yaml --acs-url=http://your-acs.local:7547/
+```
+
+cpe-sim still requires `--acs-url` (CWMP is always wired today); on startup the simulator connects to the configured MQTT broker, subscribes to `usp/v1/agent/os::AABBCCGATEWAY-0001`, and publishes a `Notify(OnBoardRequest)` to `usp/v1/controller`. A USP-aware controller (for example the herder-labs USP controller on its dev stack) materializes a device row from that notification.
+
+### First-contact gate
+
+USP-enabled profiles install a system leaf `Internal.Reboot.Cause` with initial value `LocalFactoryReset`. The session reads it before emitting first contact:
+
+| `Internal.Reboot.Cause` | First-contact emission |
+| --- | --- |
+| `LocalFactoryReset` | `Notify(OnBoardRequest)` with `oui` / `product_class` / `serial_number` / `agent_supported_protocol_versions = "1.5"`. Leaf flips to `LocalReboot` after emission. |
+| `LocalReboot` (or anything else) | `Notify(Event{event_name: "Boot!", obj_path: "Device."})` |
+
+Process restart resets the leaf back to `LocalFactoryReset` because `LoadProfile` rebuilds the tree from scratch (v0 process-restart-as-factory-reset semantics; cross-restart NVRAM persistence is deferred).
+
+### Running against a herder-labs / OpenACS dev stack
+
+If the controller's dev stack is running locally with the NATS-MQTT bridge enabled, cpe-labs joins the broker network and registers as the device-side simulator that obuspa would otherwise play in the reference fixture:
+
+```bash
+bin/cpe-sim \
+  --profile=/path/to/profile-with-usp.yaml \
+  --acs-url=http://localhost:7547/   # any CWMP endpoint works; bootstrap fires first
+```
+
+Container deployments must join the same Docker network the broker exposes; the broker host is the container service name (e.g. `nats`) rather than `127.0.0.1`.
+
+## Forward-looking architecture
+
+The sections below describe the longer-term USP architecture cpe-labs is building toward, not what `bin/cpe-sim` exposes today. Specifically:
+
+- CLI flags like `--usp-mtp=*`, `--usp-mqtt-addr=*`, `--usp-ws-url=*`, `--usp-stomp-addr=*` are **not yet implemented**. All USP knobs go through the profile's `usp:` block.
+- WebSocket and STOMP MTPs are not yet implemented.
+- Subscription-driven Notify (Periodic / ValueChange / ObjectCreation / ObjectDeletion / OperationComplete) is the Notify Emission and Subscription Table epics' work.
+- Request handlers (`Get` / `Set` / `Add` / `Delete` / `Operate` / `GetInstances` / `GetSupportedDM`) are the Request Handlers epic.
+
 ## Architectural fit
 
 The USP Agent reads from and writes to **the same `paramtree.Tree`** that the CWMP stack uses. Per-CPE state is shared:
