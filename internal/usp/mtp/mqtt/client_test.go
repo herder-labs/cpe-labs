@@ -62,7 +62,9 @@ func TestMQTTAdapterConnectSubscribePublishReceive(t *testing.T) {
 	sub := newPahoClient(t, host, port, "test-controller-sub")
 	defer sub.Disconnect(250)
 	gotCh := make(chan []byte, 1)
-	if token := sub.Subscribe(mtp.TopicControllerInbox, 1, func(_ paho.Client, msg paho.Message) {
+	// Bridge wildcard so this test sees publishes regardless of which
+	// reply-to suffix the agent attaches (covers the obuspa convention).
+	if token := sub.Subscribe(mtp.TopicControllerInboxBase+"/#", 1, func(_ paho.Client, msg paho.Message) {
 		payload := make([]byte, len(msg.Payload()))
 		copy(payload, msg.Payload())
 		gotCh <- payload
