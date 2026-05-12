@@ -173,7 +173,10 @@ func TestForceCR_NotConfigured(t *testing.T) {
 	srv := newTestServer(t, []CPEStackInspector{&fakeStack{id: "cpe-1"}}, nil, nil)
 	defer srv.Close()
 
-	resp, _ := http.Post(srv.URL+"/admin/cpes/cpe-1/cr", "", nil)
+	resp, err := http.Post(srv.URL+"/admin/cpes/cpe-1/cr", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 503 {
 		t.Errorf("status %d, want 503", resp.StatusCode)
@@ -197,7 +200,10 @@ func TestInjectFault(t *testing.T) {
 		t.Errorf("InjectFault calls = %v", fi.calls)
 	}
 
-	bad, _ := http.Post(srv.URL+"/admin/cpes/cpe-1/fault/notanumber", "", nil)
+	bad, err := http.Post(srv.URL+"/admin/cpes/cpe-1/fault/notanumber", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer bad.Body.Close()
 	if bad.StatusCode != 400 {
 		t.Errorf("bad-code status %d, want 400", bad.StatusCode)
