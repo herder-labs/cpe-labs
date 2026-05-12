@@ -34,6 +34,12 @@ For TR-369 (USP) mode, `--acs-url` may be omitted as long as `--usp-mtp` is set;
 
 See [Connection Request Listener](../guides/connection-request.md) for a deeper treatment.
 
+## Observability
+
+| Flag | Env | YAML | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `--metrics-bind-addr` | `CPE_SIM_METRICS_BIND_ADDR` | `metricsBindAddr` | "" | TCP bind for Prometheus `/metrics` + admin introspection (`/admin/cpes`, `/admin/cpes/{id}`, `POST /admin/cpes/{id}/cr`, `POST /admin/cpes/{id}/fault/{code}`). Empty disables the server. Setting it enables daemon mode. v0 has no auth; recommend a localhost bind in dev. See the [Observability guide](../guides/observability.md). |
+
 ## Process / runtime
 
 | Flag | Env | YAML | Default | Notes |
