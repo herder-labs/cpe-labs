@@ -72,6 +72,7 @@ Sugar over the verbose form. Declare the parent path once, list the children, se
 | --- | --- | --- |
 | `path` | string | Parent path *without* trailing `{i}`. |
 | `instances` | int | Number of instances to materialize. |
+| `uniqueKeys` | list of lists | (Optional) TR-181 unique-key sets that identify rows. Each entry is a list of parameter names relative to the object. The USP `Add` handler reads matching leaves under the new instance and populates `AddResp.unique_keys` plus the autonomous `Notify(ObjectCreation).unique_keys`. Omit the block to skip the feature (empty `unique_keys` on the wire). |
 | `parameters` | list | Each entry has the same fields as a top-level parameter, but `path` is relative to the parent. |
 
 ```yaml
@@ -86,7 +87,21 @@ objects:
       - path: Active
         type: xsd:boolean
         value: "true"
+
+  - path: Device.WiFi.SSID
+    instances: 1
+    uniqueKeys:
+      - [SSID]
+      - [BSSID]
+    parameters:
+      - path: SSID
+        value: "Home-{i}"
+        writable: true
+      - path: BSSID
+        value: "AABBCC11220{i}"
 ```
+
+Empty key-sets (`uniqueKeys: [[]]`) reject at load time. Cross-file declarations of `uniqueKeys` for the same object reject with both filenames named.
 
 ## `groups` (single-instance prefix grouping)
 

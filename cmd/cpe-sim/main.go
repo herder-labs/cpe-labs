@@ -37,11 +37,13 @@ import (
 	"github.com/herder-labs/cpe-labs/internal/cwmp/transport"
 	"github.com/herder-labs/cpe-labs/internal/generators"
 	"github.com/herder-labs/cpe-labs/internal/paramtree"
+	usphandlers "github.com/herder-labs/cpe-labs/internal/usp/handlers"
 	"github.com/herder-labs/cpe-labs/internal/usp/identity"
 	"github.com/herder-labs/cpe-labs/internal/usp/mtp"
 	mqttmtp "github.com/herder-labs/cpe-labs/internal/usp/mtp/mqtt"
 	"github.com/herder-labs/cpe-labs/internal/usp/notify"
 	uspsession "github.com/herder-labs/cpe-labs/internal/usp/session"
+	"github.com/herder-labs/cpe-labs/internal/usp/subscription"
 	"github.com/herder-labs/cpe-labs/internal/version"
 )
 
@@ -76,8 +78,9 @@ type cpeStack struct {
 	genRunner    *generators.Runner
 	hasScheduler bool
 
-	uspAdapter mtp.Adapter            // nil when USP disabled
-	uspOpts    *uspsession.Options    // nil when USP disabled
+	uspAdapter    mtp.Adapter             // nil when USP disabled
+	uspOpts       *uspsession.Options     // nil when USP disabled
+	uspEvaluator  *subscription.Evaluator // nil when USP disabled
 }
 
 func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
@@ -303,6 +306,25 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 		"event_schedule", eventScheduleRequiresDaemon,
 		"usp", hasAnyUSP,
 	)
+
+	for _, st := range stacks {
+		if st.uspEvaluator == nil {
+			continue
+		}
+		if err := st.uspEvaluator.Start(signalCtx); err != nil {
+			logger.Warn("usp evaluator start failed", "cpe_id", st.id, "err", err.Error())
+		}
+	}
+	defer func() {
+		for _, st := range stacks {
+			if st.uspEvaluator == nil {
+				continue
+			}
+			shutdownCtx, cancelStop := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = st.uspEvaluator.Stop(shutdownCtx)
+			cancelStop()
+		}
+	}()
 
 	var uspWG sync.WaitGroup
 	for _, st := range stacks {
@@ -672,13 +694,11 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 	}
 
 	// pendingCancels holds the cancel funcs for in-flight scheduled
-	// reboot / factory-reset deliveries. Both write paths run under
-	// sessionMu (handler invocation holds it; scheduler.ScheduleOnce
-	// re-acquires it before invoking its fn) so no extra lock needed.
-	pendingCancels := &struct {
-		reboot       func()
-		factoryReset func()
-	}{}
+	// reboot / factory-reset / usp-reboot deliveries. Both write paths
+	// run under sessionMu (handler invocation holds it; scheduler.
+	// ScheduleOnce re-acquires it before invoking its fn) so no extra
+	// lock needed.
+	pendingCancels := &pendingScheduledCancels{}
 
 	var scheduleReboot handlers.RebootSchedule
 	if prof.EventSchedule.RebootDelay > 0 {
@@ -690,11 +710,18 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 	}
 
 	hasScheduler := !prof.PeriodicInformPaths.IsZero()
+	var evaluator *subscription.Evaluator
 	valueChange := func(path string) {
 		tracker.RecordValueChange(path)
 		if hasScheduler &&
 			(path == prof.PeriodicInformPaths.Interval || path == prof.PeriodicInformPaths.Enable) {
 			in.sched.OnIntervalChange(in.id)
+		}
+		if evaluator != nil {
+			v, err := prof.Tree.Get(path)
+			if err == nil {
+				evaluator.NotifyValueChange(path, v.Raw)
+			}
 		}
 	}
 
@@ -813,17 +840,35 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 			return nil, fmt.Errorf("usp mqtt adapter: %w", mErr)
 		}
 		uspAdapter = adapter
+		uspLogger := in.logger.With("cpe_id", in.id, "role", "usp")
+
+		evaluator = subscription.New(prof.Tree, adapter, agentEID, prof.USP.ControllerEndpointID, in.sched, in.id, in.rngSource.ForCPE(in.id+":usp-subs"), uspLogger)
+
+		objectCreate := func(path string, keys map[string]string) { evaluator.NotifyObjectCreated(path, keys) }
+		objectDelete := func(path string) { evaluator.NotifyObjectDeleted(path) }
+		uspReboot := buildUSPRebootCallback(in.sched, in.id, prof.Tree, prof.EventSchedule.RebootDelay,
+			evaluator, pendingCancels, uspLogger)
+
 		uspOpts = &uspsession.Options{
-			Tree:             prof.Tree,
-			Adapter:          adapter,
-			AgentEID:         agentEID,
-			ControllerEID:    prof.USP.ControllerEndpointID,
-			OnBoardBuilder:   &notify.OnBoardRequestBuilder{
+			Tree:          prof.Tree,
+			Adapter:       adapter,
+			AgentEID:      agentEID,
+			ControllerEID: prof.USP.ControllerEndpointID,
+			OnBoardBuilder: &notify.OnBoardRequestBuilder{
 				OUIPath:    prof.USP.EndpointID.OUIPath,
 				SerialPath: prof.USP.EndpointID.SerialPath,
 			},
 			BootEventBuilder: &notify.BootEventBuilder{},
-			Logger:           in.logger.With("cpe_id", in.id, "role", "usp"),
+			Handlers: []uspsession.Handler{
+				usphandlers.NewGet(prof.Tree),
+				usphandlers.NewGetInstances(prof.Tree, prof.UniqueKeys),
+				usphandlers.NewGetSupportedDM(prof.Tree, prof.UniqueKeys, ""),
+				usphandlers.NewSet(prof.Tree, valueChange),
+				usphandlers.NewAdd(prof.Tree, prof.UniqueKeys, valueChange, objectCreate),
+				usphandlers.NewDelete(prof.Tree, objectDelete),
+				usphandlers.NewOperate(uspReboot),
+			},
+			Logger: uspLogger,
 		}
 	}
 
@@ -840,6 +885,7 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 		hasScheduler: hasScheduler,
 		uspAdapter:   uspAdapter,
 		uspOpts:      uspOpts,
+		uspEvaluator: evaluator,
 	}, nil
 }
 
@@ -1083,6 +1129,7 @@ func buildTransferScheduler(sched *scheduler.Scheduler, cpeID string, tracker *c
 type pendingScheduledCancels = struct {
 	reboot       func()
 	factoryReset func()
+	uspReboot    func()
 }
 
 // buildRebootScheduler returns a handlers.RebootSchedule that defers
@@ -1262,4 +1309,22 @@ func hasVersionFlag(args []string) bool {
 		}
 	}
 	return false
+}
+
+func buildUSPRebootCallback(sched *scheduler.Scheduler, cpeID string, tree *paramtree.Tree, delay time.Duration, evaluator *subscription.Evaluator, cancels *pendingScheduledCancels, logger *slog.Logger) func() {
+	return func() {
+		if err := tree.SetSystem(uspsession.RebootCausePath, uspsession.RebootCauseLocalBoot); err != nil {
+			logger.Warn("usp reboot: flip Internal.Reboot.Cause failed", "err", err.Error())
+		}
+		if cancels.uspReboot != nil {
+			logger.Debug("usp scheduled reboot superseded by new RPC", "cpe_id", cpeID)
+			cancels.uspReboot()
+			cancels.uspReboot = nil
+		}
+		logger.Debug("usp reboot scheduled", "cpe_id", cpeID, "delay", delay.String())
+		cancels.uspReboot = sched.ScheduleOnce(cpeID+":usp-reboot", delay, func(_ context.Context) error {
+			evaluator.FireEvent("Device.Boot!")
+			return nil
+		})
+	}
 }

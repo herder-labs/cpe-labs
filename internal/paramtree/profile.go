@@ -40,6 +40,15 @@ type Profile struct {
 	Fleet               FleetConfig
 	EventSchedule       EventScheduleConfig
 	USP                 USPConfig
+
+	// UniqueKeys maps a multi-instance object's path-template prefix
+	// (e.g. "Device.WiFi.SSID.") to the list of unique-key sets that
+	// identify rows in that object. Each key-set is a list of param
+	// names relative to the object. Populated from objects[].uniqueKeys
+	// in the profile YAML. Consumed by the USP Add handler to populate
+	// AddResp unique_keys and by GetInstances to populate CurrInstance
+	// unique_keys.
+	UniqueKeys map[string][][]string
 }
 
 // FleetConfig describes how many simulated CPEs to spawn from this
@@ -487,6 +496,7 @@ func LoadProfileFromReader(r io.Reader, path string) (*Profile, error) {
 		Fleet:               mc.Fleet,
 		EventSchedule:       mc.EventSchedule,
 		USP:                 mc.USP,
+		UniqueKeys:          mc.UniqueKeys,
 	}, nil
 }
 
@@ -544,6 +554,7 @@ type rawUSPBroker struct {
 type rawObject struct {
 	Path       string            `yaml:"path"`
 	Instances  int               `yaml:"instances"`
+	UniqueKeys [][]string        `yaml:"uniqueKeys"`
 	Parameters []rawProfileParam `yaml:"parameters"`
 }
 
@@ -827,6 +838,7 @@ func loadProfileDir(dir string) (*Profile, error) {
 		Fleet:               mc.Fleet,
 		EventSchedule:       mc.EventSchedule,
 		USP:                 mc.USP,
+		UniqueKeys:          mc.UniqueKeys,
 	}, nil
 }
 
@@ -856,6 +868,7 @@ type mergedConfig struct {
 	Fleet               FleetConfig
 	EventSchedule       EventScheduleConfig
 	USP                 USPConfig
+	UniqueKeys          map[string][][]string
 }
 
 // mergeFiles applies all files' parameters to tree, accumulates
@@ -881,6 +894,8 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 		source string
 	}
 	var allRaw []rawWithSource
+	uniqueKeys := make(map[string][][]string)
+	uniqueKeysSource := make(map[string]string)
 	for _, lf := range files {
 		for _, raw := range lf.prof.Parameters {
 			allRaw = append(allRaw, rawWithSource{raw, lf.path})
@@ -891,6 +906,38 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 		}
 		for _, raw := range expanded {
 			allRaw = append(allRaw, rawWithSource{raw, lf.path})
+		}
+		// Capture uniqueKeys per object-path prefix. expandObjects has
+		// already validated obj.Path is well-formed (non-empty, no {i},
+		// no trailing dot); the prefix is obj.Path + "." which matches
+		// the multi-instance object paths in the materialized tree
+		// (Device.WiFi.SSID.).
+		for _, obj := range lf.prof.Objects {
+			if len(obj.UniqueKeys) == 0 {
+				continue
+			}
+			if obj.Path == "" || strings.HasSuffix(obj.Path, ".") || strings.Contains(obj.Path, "{i}") {
+				// expandObjects below will surface the formatted error;
+				// skip uniqueKeys capture so we do not double-report.
+				continue
+			}
+			prefix := obj.Path + "."
+			if prev, dup := uniqueKeysSource[prefix]; dup {
+				return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s and %s both declare uniqueKeys for object %s", prev, lf.path, prefix))
+			}
+			for _, set := range obj.UniqueKeys {
+				if len(set) == 0 {
+					return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+						fmt.Errorf("%s: objects[].uniqueKeys for %s contains an empty key-set", lf.path, prefix))
+				}
+			}
+			keySets := make([][]string, 0, len(obj.UniqueKeys))
+			for _, set := range obj.UniqueKeys {
+				keySets = append(keySets, append([]string(nil), set...))
+			}
+			uniqueKeys[prefix] = keySets
+			uniqueKeysSource[prefix] = lf.path
 		}
 		expandedG, err := expandGroups(lf.prof.Groups, lf.path)
 		if err != nil {
@@ -1457,6 +1504,11 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 					fmt.Errorf("install %s: %w", rebootCausePath, merr))
 			}
 		}
+
+		if ierr := installSubscriptionTable(tree); ierr != nil {
+			return mergedConfig{}, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInternal, ierr)
+		}
+		uniqueKeys["Device.LocalAgent.Subscription."] = [][]string{{"ID"}}
 	}
 
 	return mergedConfig{
@@ -1469,6 +1521,7 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 		Fleet:               fleetCfg,
 		EventSchedule:       eventScheduleCfg,
 		USP:                 uspCfg,
+		UniqueKeys:          uniqueKeys,
 	}, nil
 }
 
@@ -1875,4 +1928,66 @@ func profileErrAt(source, paramPath string, cause error) error {
 	}
 	return cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
 		fmt.Errorf("%s: parameter %q: %w", source, paramPath, cause))
+}
+
+// installSubscriptionTable installs Device.LocalAgent.Subscription.{i}.
+// as a writable multi-instance table and seeds instance 1 with the
+// obuspa-fixture defaults so a USP controller sees a Boot! subscription
+// out of the box. Idempotent: returns nil if the table is already
+// present.
+func installSubscriptionTable(tree *Tree) error {
+	const subPath = "Device.LocalAgent.Subscription"
+	if tree.IsAddDeletable(subPath) {
+		return nil
+	}
+
+	template := NewBranch()
+	type leafSpec struct {
+		name     string
+		typ      Type
+		raw      string
+		writable bool
+	}
+	leaves := []leafSpec{
+		{"Alias", TypeString, "", true},
+		{"Enable", TypeBoolean, "false", true},
+		{"ID", TypeString, "", true},
+		{"Recipient", TypeString, "Device.LocalAgent.Controller.1", true},
+		{"NotifType", TypeString, "ValueChange", true},
+		{"ReferenceList", TypeString, "", true},
+		{"Persistent", TypeBoolean, "true", true},
+		{"Period", TypeUnsignedInt, "0", true},
+		{"TimeToLive", TypeUnsignedInt, "0", true},
+		{"NotifRetry", TypeBoolean, "false", true},
+	}
+	for _, lf := range leaves {
+		if err := template.Attach(lf.name, NewLeaf(Value{Type: lf.typ, Raw: lf.raw, Writable: lf.writable})); err != nil {
+			return fmt.Errorf("attach subscription leaf %s: %w", lf.name, err)
+		}
+	}
+	if err := tree.AddTable(subPath, template); err != nil {
+		return fmt.Errorf("AddTable %s: %w", subPath, err)
+	}
+	inst, err := tree.AddObject(subPath)
+	if err != nil {
+		return fmt.Errorf("AddObject %s: %w", subPath, err)
+	}
+	prefix := subPath + "." + strconv.Itoa(inst) + "."
+	seed := []struct {
+		path, value string
+	}{
+		{prefix + "Alias", "default-boot-event"},
+		{prefix + "Enable", "true"},
+		{prefix + "ID", "default-boot-event-ACS"},
+		{prefix + "Recipient", "Device.LocalAgent.Controller.1"},
+		{prefix + "NotifType", "Event"},
+		{prefix + "ReferenceList", "Device.Boot!"},
+		{prefix + "Persistent", "true"},
+	}
+	for _, s := range seed {
+		if err := tree.SetSystem(s.path, s.value); err != nil {
+			return fmt.Errorf("SetSystem %s: %w", s.path, err)
+		}
+	}
+	return nil
 }
