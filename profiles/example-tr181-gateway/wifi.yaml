@@ -390,3 +390,34 @@ groups:
       - path: KeyPassphrase
         value: ""
         writable: true
+
+# WiFi station churn: simulate stations joining/leaving each AP on a
+# 30s cadence. Each AP gets its own fabricator; the per-row defaults
+# encode the AP index in the MAC so each AP's stations cluster
+# distinctly in the herder ACS topology view.
+clients:
+  - path: Device.WiFi.AccessPoint.1.AssociatedDevice
+    type: wifiStation
+    targetCount: 6
+    churnInterval: 30s
+    churnRate: 1
+    rowDefaults:
+      MACAddress: "0E:A1:{cpe:MAC:2}:01:{seq:hex:02}"
+      AuthenticationState: "true"
+      Active: "true"
+      LastDataDownlinkRate: "144000"
+      LastDataUplinkRate: "72000"
+      SignalStrength: "-58"
+
+  - path: Device.WiFi.AccessPoint.2.AssociatedDevice
+    type: wifiStation
+    targetCount: 8
+    churnInterval: 45s
+    churnRate: 2
+    rowDefaults:
+      MACAddress: "0E:A2:{cpe:MAC:2}:02:{seq:hex:02}"
+      AuthenticationState: "true"
+      Active: "true"
+      LastDataDownlinkRate: "433000"
+      LastDataUplinkRate: "150000"
+      SignalStrength: "-60"

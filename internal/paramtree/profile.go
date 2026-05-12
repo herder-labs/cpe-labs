@@ -37,6 +37,7 @@ type Profile struct {
 	ConnectionRequest   ConnectionRequestConfig
 	PeriodicInformPaths PeriodicInformPaths
 	Generators          []GeneratorConfig
+	Clients             []ClientFabricatorConfig
 	Fleet               FleetConfig
 	EventSchedule       EventScheduleConfig
 	USP                 USPConfig
@@ -121,6 +122,39 @@ type FleetPool struct {
 //	enum      — cycles through Values list (xsd:string target)
 //	uptime    — monotonic seconds since process start (xsd:unsignedInt target)
 //	wallclock — current UTC time (xsd:dateTime target)
+// ClientFabricatorConfig drives row-count churn on one multi-instance
+// table. The fabricator goroutine ticks every ChurnInterval and adjusts
+// the table's row count toward TargetCount (bounded by ChurnRate per
+// tick). Each row materialize/drop calls Tree.AddObject / Tree.DeleteObject,
+// firing the existing Tree.OnWrite chain (Subscription evaluator picks
+// up autonomous Notify emission).
+type ClientFabricatorConfig struct {
+	// Path is the table-template prefix (no trailing ".", no "{i}").
+	// Must be registered as a table via objects[].
+	Path string
+
+	// Type is metadata-only in v0 (carried for logs + forward compat).
+	// Recommended values: "wifiStation", "lanHost", "generic".
+	Type string
+
+	// TargetCount is the steady-state row count. Fabricator drives the
+	// table toward this; at delta == 0 the Tick is a no-op (v0 is quiet
+	// at steady state).
+	TargetCount int
+
+	// ChurnInterval is the tick cadence.
+	ChurnInterval time.Duration
+
+	// ChurnRate caps rows added OR removed per tick.
+	ChurnRate int
+
+	// RowDefaults overlay leaves on every newly-created row. Values may
+	// reference {seq} / {seq:NN} / {seq:hex:NN} / {seq:HEX:NN} plus the
+	// existing fleet placeholders. Leaves not listed retain the table
+	// template's profile-declared default.
+	RowDefaults map[string]string
+}
+
 type GeneratorConfig struct {
 	// Path is the tree leaf the generator writes to. Type constraints
 	// depend on the generator kind (see the Supported types list).
@@ -493,6 +527,7 @@ func LoadProfileFromReader(r io.Reader, path string) (*Profile, error) {
 		ConnectionRequest:   mc.ConnectionRequest,
 		PeriodicInformPaths: mc.PeriodicInformPaths,
 		Generators:          mc.Generators,
+		Clients:             mc.Clients,
 		Fleet:               mc.Fleet,
 		EventSchedule:       mc.EventSchedule,
 		USP:                 mc.USP,
@@ -513,9 +548,19 @@ type profile struct {
 	ConnectionRequest   *rawConnectionRequest   `yaml:"connectionRequest"`
 	PeriodicInformPaths *rawPeriodicInformPaths `yaml:"periodicInformPaths"`
 	Generators          []rawGenerator          `yaml:"generators"`
+	Clients             []rawClient             `yaml:"clients"`
 	Fleet               *rawFleet               `yaml:"fleet"`
 	EventSchedule       *rawEventSchedule       `yaml:"eventSchedule"`
 	USP                 *rawUSP                 `yaml:"usp"`
+}
+
+type rawClient struct {
+	Path          string            `yaml:"path"`
+	Type          string            `yaml:"type"`
+	TargetCount   int               `yaml:"targetCount"`
+	ChurnInterval string            `yaml:"churnInterval"`
+	ChurnRate     int               `yaml:"churnRate"`
+	RowDefaults   map[string]string `yaml:"rowDefaults"`
 }
 
 // rawUSP is the YAML schema for the usp: block. nil pointer means
@@ -835,6 +880,7 @@ func loadProfileDir(dir string) (*Profile, error) {
 		ConnectionRequest:   mc.ConnectionRequest,
 		PeriodicInformPaths: mc.PeriodicInformPaths,
 		Generators:          mc.Generators,
+		Clients:             mc.Clients,
 		Fleet:               mc.Fleet,
 		EventSchedule:       mc.EventSchedule,
 		USP:                 mc.USP,
@@ -865,6 +911,7 @@ type mergedConfig struct {
 	ConnectionRequest   ConnectionRequestConfig
 	PeriodicInformPaths PeriodicInformPaths
 	Generators          []GeneratorConfig
+	Clients             []ClientFabricatorConfig
 	Fleet               FleetConfig
 	EventSchedule       EventScheduleConfig
 	USP                 USPConfig
@@ -1511,6 +1558,12 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 		uniqueKeys["Device.LocalAgent.Subscription."] = [][]string{{"ID"}}
 	}
 
+	// Merge clients: with conflict detection + load-time validation.
+	clients, cErr := mergeClients(tree, files)
+	if cErr != nil {
+		return mergedConfig{}, cErr
+	}
+
 	return mergedConfig{
 		InformParams:        infParams,
 		DeviceIDPaths:       devIDPaths,
@@ -1518,11 +1571,68 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 		ConnectionRequest:   crCfg,
 		PeriodicInformPaths: periodicCfg,
 		Generators:          generators,
+		Clients:             clients,
 		Fleet:               fleetCfg,
 		EventSchedule:       eventScheduleCfg,
 		USP:                 uspCfg,
 		UniqueKeys:          uniqueKeys,
 	}, nil
+}
+
+// mergeClients aggregates clients: blocks from every profile file and
+// validates them against the materialized tree. Returns one
+// ClientFabricatorConfig per declared fabricator in declaration order.
+func mergeClients(tree *Tree, files []*loadedFile) ([]ClientFabricatorConfig, error) {
+	var out []ClientFabricatorConfig
+	seen := map[string]string{} // path -> source-file
+	for _, lf := range files {
+		for i, raw := range lf.prof.Clients {
+			where := fmt.Sprintf("%s: clients[%d] (path=%q)", lf.path, i, raw.Path)
+			if raw.Path == "" {
+				return nil, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s: path is required", where))
+			}
+			if prev, dup := seen[raw.Path]; dup {
+				return nil, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s and %s both declare clients[].path=%q", prev, lf.path, raw.Path))
+			}
+			if !tree.IsAddDeletable(raw.Path) {
+				return nil, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s: path %q is not a registered multi-instance table (declare it under objects:[])", where, raw.Path))
+			}
+			if raw.TargetCount < 0 {
+				return nil, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s: targetCount must be >= 0, got %d", where, raw.TargetCount))
+			}
+			if raw.ChurnInterval == "" {
+				return nil, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s: churnInterval is required", where))
+			}
+			interval, perr := time.ParseDuration(raw.ChurnInterval)
+			if perr != nil {
+				return nil, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s: churnInterval %q: %w", where, raw.ChurnInterval, perr))
+			}
+			if interval <= 0 {
+				return nil, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s: churnInterval must be > 0, got %s", where, interval))
+			}
+			if raw.ChurnRate <= 0 {
+				return nil, cpeerr.Wrap("paramtree.LoadProfile", cpeerr.KindInvalidArgument,
+					fmt.Errorf("%s: churnRate must be > 0, got %d", where, raw.ChurnRate))
+			}
+			seen[raw.Path] = lf.path
+			out = append(out, ClientFabricatorConfig{
+				Path:          raw.Path,
+				Type:          raw.Type,
+				TargetCount:   raw.TargetCount,
+				ChurnInterval: interval,
+				ChurnRate:     raw.ChurnRate,
+				RowDefaults:   raw.RowDefaults,
+			})
+		}
+	}
+	return out, nil
 }
 
 // bbfUint32Max mirrors the xsd:unsignedInt ceiling. Counters whose Max

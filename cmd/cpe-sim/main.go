@@ -28,6 +28,7 @@ import (
 	"github.com/herder-labs/cpe-labs/internal/cpeconfig"
 	"github.com/herder-labs/cpe-labs/internal/cpelog"
 	"github.com/herder-labs/cpe-labs/internal/cperng"
+	"github.com/herder-labs/cpe-labs/internal/clients"
 	"github.com/herder-labs/cpe-labs/internal/cwmp"
 	"github.com/herder-labs/cpe-labs/internal/cwmp/cr"
 	"github.com/herder-labs/cpe-labs/internal/cwmp/handlers"
@@ -75,8 +76,9 @@ type cpeStack struct {
 	session      *cwmp.Session
 	sessionMu    *sync.Mutex
 	runOpts      *cwmp.RunSessionOptions
-	genRunner    *generators.Runner
-	hasScheduler bool
+	genRunner       *generators.Runner
+	clientRunner    *clients.Runner
+	hasScheduler    bool
 
 	uspAdapter    mtp.Adapter             // nil when USP disabled
 	uspOpts       *uspsession.Options     // nil when USP disabled
@@ -225,8 +227,24 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 		}()
 	}
 
+	// Defer client-fabricator runner shutdowns.
+	for _, st := range stacks {
+		st := st
+		if st.clientRunner == nil {
+			continue
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if shutdownErr := st.clientRunner.Stop(shutdownCtx); shutdownErr != nil {
+				logger.Warn("client runner shutdown error", "cpe_id", st.id, "err", shutdownErr.Error())
+			}
+		}()
+	}
+
 	hasAnyScheduler := false
 	hasAnyGenerators := false
+	hasAnyClients := false
 	hasAnyUSP := false
 	for _, st := range stacks {
 		if st.hasScheduler {
@@ -234,6 +252,9 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 		}
 		if st.genRunner != nil {
 			hasAnyGenerators = true
+		}
+		if st.clientRunner != nil {
+			hasAnyClients = true
 		}
 		if st.uspOpts != nil {
 			hasAnyUSP = true
@@ -249,6 +270,7 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 		"fleet_count", count,
 		"scheduler_enabled", hasAnyScheduler,
 		"generators_enabled", hasAnyGenerators,
+		"clients_enabled", hasAnyClients,
 		"event_schedule_daemon", eventScheduleRequiresDaemon,
 		"usp_enabled", hasAnyUSP,
 	)
@@ -289,11 +311,19 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 			return fmt.Errorf("generators.Start (cpe=%s): %w", st.id, startErr)
 		}
 	}
+	for _, st := range stacks {
+		if st.clientRunner == nil {
+			continue
+		}
+		if startErr := st.clientRunner.Start(ctx); startErr != nil {
+			return fmt.Errorf("clients.Start (cpe=%s): %w", st.id, startErr)
+		}
+	}
 
 	// One-shot mode: exit after bootstrap if nothing is keeping us
-	// alive (no listener, no scheduler, no generators, no
-	// event-schedule deferral that needs to fire later, no USP).
-	if listener == nil && !hasAnyScheduler && !hasAnyGenerators && !eventScheduleRequiresDaemon && !hasAnyUSP {
+	// alive (no listener, no scheduler, no generators, no clients,
+	// no event-schedule deferral that needs to fire later, no USP).
+	if listener == nil && !hasAnyScheduler && !hasAnyGenerators && !hasAnyClients && !eventScheduleRequiresDaemon && !hasAnyUSP {
 		return nil
 	}
 
@@ -303,6 +333,7 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 		"listener", listener != nil,
 		"scheduler", hasAnyScheduler,
 		"generators", hasAnyGenerators,
+		"clients", hasAnyClients,
 		"event_schedule", eventScheduleRequiresDaemon,
 		"usp", hasAnyUSP,
 	)
@@ -804,6 +835,16 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 		genRunner = gr
 	}
 
+	// Client fabricators: per-CPE Runner driving row-count churn.
+	var clientRunner *clients.Runner
+	if len(prof.Clients) > 0 {
+		cr, cerr := buildClientRunner(prof.Clients, prof.Tree, in.instance, in.id, prof.Fleet.Pools, in.rngSource, in.logger.With("cpe_id", in.id))
+		if cerr != nil {
+			return nil, fmt.Errorf("client fabricators: %w", cerr)
+		}
+		clientRunner = cr
+	}
+
 	// CR listener registration (per-CPE path when count > 1).
 	if in.listener != nil {
 		if regErr := registerCREndpoint(in.listener, cfg, prof, in.id, in.fleetCount, runOpts, sessionMu, in.logger); regErr != nil {
@@ -882,6 +923,7 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 		sessionMu:    sessionMu,
 		runOpts:      runOpts,
 		genRunner:    genRunner,
+		clientRunner: clientRunner,
 		hasScheduler: hasScheduler,
 		uspAdapter:   uspAdapter,
 		uspOpts:      uspOpts,
@@ -1220,6 +1262,65 @@ func buildFactoryResetScheduler(sched *scheduler.Scheduler, cpeID string, delay 
 			return nil
 		})
 	}
+}
+
+// buildClientRunner walks prof.Clients and constructs a client.Runner
+// with one Fabricator per entry. Fleet placeholders in each row's
+// RowDefaults are pre-resolved against the CPE's instance/pools so the
+// fabricator only needs to expand {seq} at Tick time.
+func buildClientRunner(cfgs []paramtree.ClientFabricatorConfig, tree *paramtree.Tree, instance int, cpeID string, pools map[string]paramtree.FleetPool, rngSource *cperng.Source, logger *slog.Logger) (*clients.Runner, error) {
+	resolvedPools, perr := resolveFleetPools(pools, instance)
+	if perr != nil {
+		return nil, fmt.Errorf("resolve fleet pools for client fabricators: %w", perr)
+	}
+	entries := make([]clients.Entry, 0, len(cfgs))
+	for i, c := range cfgs {
+		// Pre-resolve fleet placeholders in RowDefaults.
+		resolved := make(map[string]string, len(c.RowDefaults))
+		for k, v := range c.RowDefaults {
+			next, sErr := substituteFleetPlaceholders(v, instance, cpeID, resolvedPools)
+			if sErr != nil {
+				return nil, fmt.Errorf("clients[%d] rowDefaults[%s]: %w", i, k, sErr)
+			}
+			resolved[k] = next
+		}
+		fab, ferr := clients.New(clients.Options{
+			Path:        c.Path,
+			Type:        c.Type,
+			Target:      c.TargetCount,
+			ChurnRate:   c.ChurnRate,
+			RowDefaults: resolved,
+			Tree:        tree,
+			Logger:      logger,
+		})
+		if ferr != nil {
+			return nil, fmt.Errorf("clients[%d] (%s): %w", i, c.Path, ferr)
+		}
+		entries = append(entries, clients.Entry{
+			Fabricator: fab,
+			Interval:   c.ChurnInterval,
+			RNG:        rngSource.ForCPE(cpeID + ":clients:" + c.Path),
+		})
+	}
+	return clients.NewRunner(clients.RunnerOptions{
+		Entries: entries,
+		Logger:  logger,
+	})
+}
+
+// resolveFleetPools mirrors the per-CPE pool resolution applyFleetPlaceholders
+// does at startup; client fabricators need the same map for their
+// RowDefaults pre-expansion.
+func resolveFleetPools(pools map[string]paramtree.FleetPool, instance int) (map[string]string, error) {
+	out := make(map[string]string, len(pools))
+	for name, pool := range pools {
+		v, err := paramtree.ResolvePool(pool, instance)
+		if err != nil {
+			return nil, fmt.Errorf("pool %q instance %d: %w", name, instance, err)
+		}
+		out[name] = v
+	}
+	return out, nil
 }
 
 // buildGenerators walks prof.Generators and constructs a runner with

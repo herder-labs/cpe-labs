@@ -40,3 +40,22 @@ objects:
         value: "Device.Ethernet.Interface.1"
       - path: Layer3Interface
         value: "Device.IP.Interface.2"
+
+# LAN host churn: simulate DHCP-style join/leave at 60s cadence so the
+# ACS sees a rotating client population. Each new row gets a
+# sequence-derived MAC + IP. Fleet placeholders ({cpe}, {cpe:MAC:N})
+# are pre-resolved per CPE before the fabricator starts.
+clients:
+  - path: Device.Hosts.Host
+    type: lanHost
+    targetCount: 8
+    churnInterval: 60s
+    churnRate: 1
+    rowDefaults:
+      HostName: "host-{seq}"
+      IPAddress: "192.168.{cpe}.1{seq:02}"
+      PhysAddress: "AE:{cpe:MAC:2}:00:00:{seq:hex:02}"
+      Active: "true"
+      AddressSource: "DHCP"
+      Layer1Interface: "Device.Ethernet.Interface.1"
+      Layer3Interface: "Device.IP.Interface.2"
