@@ -33,5 +33,8 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Acceptance suite
+        run: make acceptance
+
       - name: Build
         run: make build
