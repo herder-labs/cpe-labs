@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/herder-labs/cpe-labs/internal/metrics"
 	"github.com/herder-labs/cpe-labs/internal/paramtree"
 )
 
@@ -49,6 +50,9 @@ type Options struct {
 	// Clock is the time source. nil = realClock; tests inject
 	// fakeClock to drive ticks deterministically.
 	Clock Clock
+
+	// Metrics, when non-nil, receives PeriodicTicksTotal increments.
+	Metrics *metrics.Registry
 }
 
 // Registration describes one CPE the scheduler should service.
@@ -90,8 +94,9 @@ type Registration struct {
 // Scheduler holds per-CPE timer state. Goroutine-safe; one instance
 // services every registered CPE.
 type Scheduler struct {
-	logger *slog.Logger
-	clock  Clock
+	logger  *slog.Logger
+	clock   Clock
+	metrics *metrics.Registry
 
 	mu      sync.Mutex
 	cpes    map[string]*cpeEntry
@@ -134,11 +139,12 @@ func NewScheduler(opts Options) *Scheduler {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
-		logger: opts.Logger,
-		clock:  opts.Clock,
-		cpes:   make(map[string]*cpeEntry),
-		ctx:    ctx,
-		cancel: cancel,
+		logger:  opts.Logger,
+		clock:   opts.Clock,
+		metrics: opts.Metrics,
+		cpes:    make(map[string]*cpeEntry),
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 }
 
@@ -305,6 +311,10 @@ func (s *Scheduler) handleTick(e *cpeEntry) {
 		return
 	}
 	defer e.unlockSession()
+
+	if s.metrics != nil {
+		s.metrics.PeriodicTicksTotal.Inc()
+	}
 
 	if err := e.onTick(s.ctx); err != nil {
 		s.logger.Warn("scheduler: tick callback failed",

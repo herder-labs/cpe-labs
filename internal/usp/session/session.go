@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/herder-labs/cpe-labs/internal/cpeerr"
+	"github.com/herder-labs/cpe-labs/internal/metrics"
 	"github.com/herder-labs/cpe-labs/internal/paramtree"
 	"github.com/herder-labs/cpe-labs/internal/usp/codec"
 	uspproto "github.com/herder-labs/cpe-labs/internal/usp/codec/proto"
@@ -29,6 +31,7 @@ type Options struct {
 	BootEventBuilder *notify.BootEventBuilder
 	Handlers         []Handler
 	Logger           *slog.Logger
+	Metrics          *metrics.Registry
 }
 
 func Run(ctx context.Context, opts Options) error {
@@ -109,6 +112,10 @@ func emitFirstContact(ctx context.Context, opts Options, onBoard *notify.OnBoard
 		"to", opts.ControllerEID,
 	)
 
+	if opts.Metrics != nil {
+		opts.Metrics.BootstrapsTotal.Inc()
+	}
+
 	if cause == RebootCauseFactoryRst {
 		if err := opts.Tree.SetSystem(RebootCausePath, RebootCauseLocalBoot); err != nil {
 			return &cpeerr.Error{Op: "session.flipRebootCause", Kind: cpeerr.KindInternal, Err: err}
@@ -145,22 +152,35 @@ func handleInbound(ctx context.Context, opts Options, dispatch map[uspproto.Head
 		"from_id", record.GetFromId(),
 	)
 
+	msgTypeLabel := reqHeader.GetMsgType().String()
+	start := time.Now()
+
 	handler, ok := dispatch[reqHeader.GetMsgType()]
 	if !ok {
 		resp := buildErrorMsg(reqHeader.GetMsgId(), USPErrMessageFailed,
 			fmt.Sprintf("Message failed: msg_type %s not supported", reqHeader.GetMsgType()))
+		if opts.Metrics != nil {
+			opts.Metrics.USPRequests.WithLabelValues(msgTypeLabel, "unsupported").Inc()
+			opts.Metrics.USPRespRTT.WithLabelValues(msgTypeLabel).Observe(time.Since(start).Seconds())
+		}
 		sendResponse(ctx, opts, record, resp, logger)
 		return
 	}
 
 	resp, herr := handler.Handle(ctx, req)
+	result := "ok"
 	if herr != nil {
+		result = "error"
 		code := uint32(USPErrMessageFailed)
 		var ce *cpeerr.Error
 		if errors.As(herr, &ce) && ce.FaultCode != 0 {
 			code = uint32(ce.FaultCode)
 		}
 		resp = buildErrorMsg(reqHeader.GetMsgId(), code, herr.Error())
+	}
+	if opts.Metrics != nil {
+		opts.Metrics.USPRequests.WithLabelValues(msgTypeLabel, result).Inc()
+		opts.Metrics.USPRespRTT.WithLabelValues(msgTypeLabel).Observe(time.Since(start).Seconds())
 	}
 	if resp == nil {
 		logger.Warn("usp handler returned nil response with no error", "msg_type", reqHeader.GetMsgType().String())

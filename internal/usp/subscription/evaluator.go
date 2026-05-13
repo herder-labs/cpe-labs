@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/herder-labs/cpe-labs/internal/cwmp/scheduler"
+	"github.com/herder-labs/cpe-labs/internal/metrics"
 	"github.com/herder-labs/cpe-labs/internal/paramtree"
 	"github.com/herder-labs/cpe-labs/internal/usp/codec"
 	uspproto "github.com/herder-labs/cpe-labs/internal/usp/codec/proto"
@@ -42,6 +43,7 @@ type Evaluator struct {
 	CPEID         string
 	RNG           *rand.Rand
 	Logger        *slog.Logger
+	Metrics       *metrics.Registry
 
 	mu              sync.RWMutex
 	valueChange     map[string][]subscriptionRef
@@ -351,6 +353,9 @@ func (e *Evaluator) send(msg *uspproto.Msg, kind, k, v string) {
 	if err := e.Adapter.Send(context.Background(), wire); err != nil {
 		e.Logger.Warn("usp evaluator send failed", "kind", kind, k, v, "err", err.Error())
 		return
+	}
+	if e.Metrics != nil {
+		e.Metrics.AutonomousNotifiesTotal.WithLabelValues(kind, "true").Inc()
 	}
 	e.Logger.Info("usp "+kind+" notify sent", k, v)
 }

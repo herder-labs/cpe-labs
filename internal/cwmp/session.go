@@ -16,6 +16,7 @@ import (
 	"github.com/herder-labs/cpe-labs/internal/cwmp/inform"
 	"github.com/herder-labs/cpe-labs/internal/cwmp/soap"
 	"github.com/herder-labs/cpe-labs/internal/cwmp/transport"
+	"github.com/herder-labs/cpe-labs/internal/metrics"
 )
 
 // SessionOptions configures one Session.
@@ -28,6 +29,7 @@ type SessionOptions struct {
 	SessionTimeout time.Duration
 	Logger         *slog.Logger
 	IDGenerator    func() string
+	Metrics        *metrics.Registry
 }
 
 // Session runs one CWMP session against an ACS. Sessions are
@@ -43,6 +45,7 @@ type Session struct {
 	timeout        time.Duration
 	logger         *slog.Logger
 	nextID         func() string
+	metrics        *metrics.Registry
 }
 
 // CPEInitiatedRPC is one RPC the CPE wants to send between
@@ -115,6 +118,7 @@ func NewSession(opts SessionOptions) (*Session, error) {
 		timeout:   opts.SessionTimeout,
 		logger:    opts.Logger,
 		nextID:    idGen,
+		metrics:   opts.Metrics,
 	}, nil
 }
 
@@ -131,7 +135,21 @@ func (s *Session) Run(ctx context.Context, events []inform.Event) error {
 	s.transport.ResetSession()
 	s.logger.Info("cwmp session start", "events", eventCodes(events))
 
+	codes := eventCodes(events)
+	result := "ok"
+	defer func() {
+		if s.metrics != nil {
+			for _, code := range codes {
+				s.metrics.InformsTotal.WithLabelValues(code, result).Inc()
+			}
+			if len(codes) == 0 {
+				s.metrics.InformsTotal.WithLabelValues("", result).Inc()
+			}
+		}
+	}()
+
 	if err := s.sendInform(ctx, events); err != nil {
+		result = "error"
 		s.logger.Info("cwmp session end", "result", "error", "err", err.Error())
 		return err
 	}
@@ -141,6 +159,7 @@ func (s *Session) Run(ctx context.Context, events []inform.Event) error {
 	// entering the drain loop.
 	for _, rpc := range s.pendingCPERPCs {
 		if err := s.sendCPEInitiated(ctx, rpc); err != nil {
+			result = "error"
 			s.logger.Info("cwmp session end", "result", "error", "err", err.Error())
 			return err
 		}
@@ -154,6 +173,7 @@ func (s *Session) Run(ctx context.Context, events []inform.Event) error {
 	for {
 		respBytes, err := s.send(ctx, outbound)
 		if err != nil {
+			result = "error"
 			s.logger.Info("cwmp session end", "result", "error", "err", err.Error())
 			return err
 		}
@@ -164,6 +184,7 @@ func (s *Session) Run(ctx context.Context, events []inform.Event) error {
 
 		outbound, err = s.handleACSMessage(ctx, respBytes)
 		if err != nil {
+			result = "error"
 			s.logger.Info("cwmp session end", "result", "error", "err", err.Error())
 			return err
 		}
@@ -224,6 +245,9 @@ func (s *Session) dispatch(ctx context.Context, method, requestID string, req xm
 	if !found {
 		s.logger.Warn("cwmp method not supported", "method", method, "id", requestID)
 		drainTokens(req)
+		if s.metrics != nil {
+			s.metrics.FaultsTotal.WithLabelValues("cwmp", strconv.Itoa(faultMethodNotSupported)).Inc()
+		}
 		return s.encodeFault(requestID, soap.Fault{
 			FaultCode:   faultMethodNotSupported,
 			FaultString: "Method not supported",
@@ -241,7 +265,13 @@ func (s *Session) dispatch(ctx context.Context, method, requestID string, req xm
 	if handlerErr != nil {
 		var faultErr *FaultError
 		if errors.As(handlerErr, &faultErr) {
+			if s.metrics != nil {
+				s.metrics.FaultsTotal.WithLabelValues("cwmp", strconv.Itoa(faultErr.Fault.FaultCode)).Inc()
+			}
 			return s.encodeFault(requestID, faultErr.Fault)
+		}
+		if s.metrics != nil {
+			s.metrics.FaultsTotal.WithLabelValues("cwmp", strconv.Itoa(faultInternalError)).Inc()
 		}
 		return s.encodeFault(requestID, soap.Fault{
 			FaultCode:   faultInternalError,

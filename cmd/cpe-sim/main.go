@@ -25,6 +25,9 @@ import (
 	"syscall"
 	"time"
 
+	"net/http"
+
+	"github.com/herder-labs/cpe-labs/internal/admin"
 	"github.com/herder-labs/cpe-labs/internal/cpeconfig"
 	"github.com/herder-labs/cpe-labs/internal/cpelog"
 	"github.com/herder-labs/cpe-labs/internal/cperng"
@@ -37,6 +40,7 @@ import (
 	"github.com/herder-labs/cpe-labs/internal/cwmp/transfer"
 	"github.com/herder-labs/cpe-labs/internal/cwmp/transport"
 	"github.com/herder-labs/cpe-labs/internal/generators"
+	"github.com/herder-labs/cpe-labs/internal/metrics"
 	"github.com/herder-labs/cpe-labs/internal/paramtree"
 	usphandlers "github.com/herder-labs/cpe-labs/internal/usp/handlers"
 	"github.com/herder-labs/cpe-labs/internal/usp/identity"
@@ -83,6 +87,102 @@ type cpeStack struct {
 	uspAdapter    mtp.Adapter             // nil when USP disabled
 	uspOpts       *uspsession.Options     // nil when USP disabled
 	uspEvaluator  *subscription.Evaluator // nil when USP disabled
+
+	stateMu       sync.RWMutex
+	lifecycle     string
+	lastEvent     string
+	lastEventAt   time.Time
+	eventTail     []admin.EventTail
+	treeSamplePaths []string
+}
+
+const eventTailCap = 32
+
+func (s *cpeStack) ID() string     { return s.id }
+func (s *cpeStack) Serial() string { return s.serial }
+
+func (s *cpeStack) LifecycleState() string {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.lifecycle
+}
+
+func (s *cpeStack) LastEvent() (string, time.Time) {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.lastEvent, s.lastEventAt
+}
+
+func (s *cpeStack) RecentEvents() []admin.EventTail {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	out := make([]admin.EventTail, len(s.eventTail))
+	copy(out, s.eventTail)
+	return out
+}
+
+func (s *cpeStack) TreeSample() map[string]string {
+	s.stateMu.RLock()
+	paths := append([]string(nil), s.treeSamplePaths...)
+	s.stateMu.RUnlock()
+
+	out := make(map[string]string, len(paths))
+	for _, p := range paths {
+		v, err := s.tree.Get(p)
+		if err == nil {
+			out[p] = v.Raw
+		}
+	}
+	return out
+}
+
+func (s *cpeStack) USPSubscriptionSummary() []admin.USPSubscription {
+	if s.uspEvaluator == nil {
+		return nil
+	}
+	children, err := s.tree.Children(subscription.SubscriptionTablePath)
+	if err != nil {
+		return nil
+	}
+	out := make([]admin.USPSubscription, 0, len(children))
+	for _, c := range children {
+		if !strings.HasSuffix(c.Name, ".") {
+			continue
+		}
+		rowPath := strings.TrimSuffix(c.Name, ".")
+		get := func(leaf string) string {
+			v, gerr := s.tree.Get(rowPath + "." + leaf)
+			if gerr != nil {
+				return ""
+			}
+			return v.Raw
+		}
+		out = append(out, admin.USPSubscription{
+			ID:            get("ID"),
+			NotifType:     get("NotifType"),
+			ReferenceList: get("ReferenceList"),
+			Recipient:     get("Recipient"),
+		})
+	}
+	return out
+}
+
+func (s *cpeStack) setLifecycle(state string) {
+	s.stateMu.Lock()
+	s.lifecycle = state
+	s.stateMu.Unlock()
+}
+
+func (s *cpeStack) recordEvent(name string) {
+	now := time.Now().UTC()
+	s.stateMu.Lock()
+	s.lastEvent = name
+	s.lastEventAt = now
+	s.eventTail = append(s.eventTail, admin.EventTail{Name: name, At: now})
+	if len(s.eventTail) > eventTailCap {
+		s.eventTail = s.eventTail[len(s.eventTail)-eventTailCap:]
+	}
+	s.stateMu.Unlock()
 }
 
 func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
@@ -162,7 +262,12 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 		"seed_supplied", cfg.Seed != 0,
 		"root_seed", rngSource.RootSeed())
 
-	sched := scheduler.NewScheduler(scheduler.Options{Logger: logger})
+	var metricsRegistry *metrics.Registry
+	if cfg.MetricsBindAddr != "" {
+		metricsRegistry = metrics.NewRegistry()
+	}
+
+	sched := scheduler.NewScheduler(scheduler.Options{Logger: logger, Metrics: metricsRegistry})
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -205,6 +310,7 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 			sched:      sched,
 			listener:   listener,
 			logger:     logger,
+			metrics:    metricsRegistry,
 		})
 		if buildErr != nil {
 			return fmt.Errorf("build CPE %s (serial=%s): %w", id, serial, buildErr)
@@ -286,11 +392,39 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 		}
 	}
 
+	var metricsServer *http.Server
+	if metricsRegistry != nil {
+		metricsRegistry.StartProcessCollector(ctx)
+		startCPEStatePoller(ctx, metricsRegistry, stacks)
+
+		inspectors := make([]admin.CPEStackInspector, 0, len(stacks))
+		for _, st := range stacks {
+			inspectors = append(inspectors, st)
+		}
+		adminServer := admin.NewServer(inspectors, nil, nil)
+
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", metricsRegistry.Handler())
+		mux.Handle("/admin/", adminServer.Routes())
+		metricsServer = &http.Server{Addr: cfg.MetricsBindAddr, Handler: mux}
+		go func() {
+			logger.Info("metrics + admin server listening", "addr", cfg.MetricsBindAddr)
+			if serveErr := metricsServer.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				logger.Warn("metrics + admin server exited", "err", serveErr.Error())
+			}
+		}()
+		defer func() {
+			shutdownCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancelStop()
+			_ = metricsServer.Shutdown(shutdownCtx)
+		}()
+	}
+
 	// Bootstrap all CPEs in parallel. One slow / failing CPE shouldn't
 	// gate the others. We log per-CPE outcomes; the run() return value
 	// only reflects the very-first hard failure (typically transport
 	// misconfig that affects everyone).
-	bootstrapErr := bootstrapAll(ctx, stacks, templateProf.EventSchedule.BootDelay, logger)
+	bootstrapErr := bootstrapAll(ctx, stacks, templateProf.EventSchedule.BootDelay, metricsRegistry, logger)
 	if bootstrapErr != nil {
 		return bootstrapErr
 	}
@@ -322,8 +456,9 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 
 	// One-shot mode: exit after bootstrap if nothing is keeping us
 	// alive (no listener, no scheduler, no generators, no clients,
-	// no event-schedule deferral that needs to fire later, no USP).
-	if listener == nil && !hasAnyScheduler && !hasAnyGenerators && !hasAnyClients && !eventScheduleRequiresDaemon && !hasAnyUSP {
+	// no event-schedule deferral that needs to fire later, no USP,
+	// no metrics/admin server).
+	if listener == nil && !hasAnyScheduler && !hasAnyGenerators && !hasAnyClients && !eventScheduleRequiresDaemon && !hasAnyUSP && metricsServer == nil {
 		return nil
 	}
 
@@ -646,6 +781,7 @@ type cpeStackInputs struct {
 	sched      *scheduler.Scheduler
 	listener   *cr.Listener // may be nil
 	logger     *slog.Logger
+	metrics    *metrics.Registry // may be nil
 }
 
 // buildCPEStack constructs one CPE: fresh tree (re-loaded from disk),
@@ -760,6 +896,7 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 		Transport: tt,
 		Inform:    placeholder,
 		Logger:    in.logger.With("cpe_id", in.id),
+		Metrics:   in.metrics,
 		Handlers: []cwmp.Handler{
 			handlers.NewGetParameterValues(prof.Tree),
 			handlers.NewGetParameterNames(prof.Tree),
@@ -884,6 +1021,7 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 		uspLogger := in.logger.With("cpe_id", in.id, "role", "usp")
 
 		evaluator = subscription.New(prof.Tree, adapter, agentEID, prof.USP.ControllerEndpointID, in.sched, in.id, in.rngSource.ForCPE(in.id+":usp-subs"), uspLogger)
+		evaluator.Metrics = in.metrics
 
 		objectCreate := func(path string, keys map[string]string) { evaluator.NotifyObjectCreated(path, keys) }
 		objectDelete := func(path string) { evaluator.NotifyObjectDeleted(path) }
@@ -909,7 +1047,8 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 				usphandlers.NewDelete(prof.Tree, objectDelete),
 				usphandlers.NewOperate(uspReboot),
 			},
-			Logger: uspLogger,
+			Logger:  uspLogger,
+			Metrics: in.metrics,
 		}
 	}
 
@@ -928,6 +1067,13 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 		uspAdapter:   uspAdapter,
 		uspOpts:      uspOpts,
 		uspEvaluator: evaluator,
+		lifecycle:    "new",
+		treeSamplePaths: []string{
+			prof.DeviceIDPaths.Manufacturer,
+			prof.DeviceIDPaths.OUI,
+			prof.DeviceIDPaths.ProductClass,
+			prof.DeviceIDPaths.SerialNumber,
+		},
 	}, nil
 }
 
@@ -940,7 +1086,36 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 // clock duration (real time.Sleep), modelling a CPE that takes time
 // to reach the ACS after process start. The fleet still bootstraps in
 // parallel — every CPE waits the same delay independently.
-func bootstrapAll(ctx context.Context, stacks []*cpeStack, bootDelay time.Duration, logger *slog.Logger) error {
+// startCPEStatePoller samples each cpeStack's lifecycle every 5s and
+// updates the CPEsByState gauge. Aggregation here keeps cpe_id off the
+// metric labels (cardinality concern at fleet scale).
+func startCPEStatePoller(ctx context.Context, reg *metrics.Registry, stacks []*cpeStack) {
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		sample := func() {
+			counts := map[string]int{}
+			for _, st := range stacks {
+				counts[st.LifecycleState()]++
+			}
+			reg.CPEsByState.Reset()
+			for state, n := range counts {
+				reg.CPEsByState.WithLabelValues(state).Set(float64(n))
+			}
+		}
+		sample()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				sample()
+			}
+		}
+	}()
+}
+
+func bootstrapAll(ctx context.Context, stacks []*cpeStack, bootDelay time.Duration, mreg *metrics.Registry, logger *slog.Logger) error {
 	if len(stacks) == 0 {
 		return nil
 	}
@@ -964,7 +1139,13 @@ func bootstrapAll(ctx context.Context, stacks []*cpeStack, bootDelay time.Durati
 				}
 			}
 			start := time.Now()
+			st.setLifecycle("bootstrapping")
 			if err := cwmp.RunSession(ctx, *st.runOpts, cwmp.TriggerStartup); err != nil {
+				if mreg != nil {
+					mreg.FailedSessionsTotal.Inc()
+				}
+				st.setLifecycle("failed")
+				st.recordEvent("0 BOOTSTRAP failed")
 				logger.Info("bootstrap session failed",
 					"cpe_id", st.id, "serial", st.serial,
 					"duration", time.Since(start).String(),
@@ -972,6 +1153,11 @@ func bootstrapAll(ctx context.Context, stacks []*cpeStack, bootDelay time.Durati
 				results <- result{id: st.id, err: err}
 				return
 			}
+			if mreg != nil {
+				mreg.BootstrapsTotal.Inc()
+			}
+			st.setLifecycle("ready")
+			st.recordEvent("0 BOOTSTRAP")
 			logger.Info("bootstrap session completed",
 				"cpe_id", st.id, "serial", st.serial,
 				"duration", time.Since(start).String())

@@ -41,6 +41,11 @@ type Config struct {
 	CRBindAddr    string        `yaml:"crBindAddr"`
 	CRPath        string        `yaml:"crPath"`
 	CRPublishPath string        `yaml:"crPublishPath"`
+
+	// MetricsBindAddr controls the Prometheus /metrics + /admin/* listener.
+	// Empty disables the server (no observability surface, no daemon-mode
+	// trigger). Recommend a localhost bind in dev.
+	MetricsBindAddr string `yaml:"metricsBindAddr"`
 }
 
 // defaults returns the baseline Config before any source overlays it.
@@ -75,9 +80,10 @@ var knownEnvKeys = map[string]struct{}{
 	envPrefix + "CONCURRENCY":     {},
 	envPrefix + "SEED":            {},
 	envPrefix + "PROFILE":         {},
-	envPrefix + "CR_BIND_ADDR":    {},
-	envPrefix + "CR_PATH":         {},
-	envPrefix + "CR_PUBLISH_PATH": {},
+	envPrefix + "CR_BIND_ADDR":      {},
+	envPrefix + "CR_PATH":           {},
+	envPrefix + "CR_PUBLISH_PATH":   {},
+	envPrefix + "METRICS_BIND_ADDR": {},
 }
 
 // Load parses configuration from CLI args, env vars, and (optionally) a
@@ -245,6 +251,9 @@ func applyEnv(env map[string]string, cfg *Config) error {
 	if v, ok := env[envPrefix+"CR_PUBLISH_PATH"]; ok && v != "" {
 		cfg.CRPublishPath = v
 	}
+	if v, ok := env[envPrefix+"METRICS_BIND_ADDR"]; ok && v != "" {
+		cfg.MetricsBindAddr = v
+	}
 	return nil
 }
 
@@ -269,6 +278,7 @@ func applyFlags(args []string, cfg *Config) error {
 	crBindAddr := fs.String("cr-bind-addr", cfg.CRBindAddr, "TCP address to bind the connection-request listener (empty disables daemon mode)")
 	crPath := fs.String("cr-path", cfg.CRPath, "URL path the connection-request listener serves")
 	crPublishPath := fs.String("cr-publish-path", cfg.CRPublishPath, "parameter-tree path where the listener URL is published")
+	metricsBindAddr := fs.String("metrics-bind-addr", cfg.MetricsBindAddr, "TCP address to bind the Prometheus /metrics + /admin/* listener (empty disables)")
 	// --version is documented here but consumed by main() before Load runs;
 	// keeping it in the FlagSet means --help lists it and it does not error
 	// out as "unknown flag" if it appears alongside other flags.
@@ -296,6 +306,7 @@ func applyFlags(args []string, cfg *Config) error {
 	cfg.CRBindAddr = *crBindAddr
 	cfg.CRPath = *crPath
 	cfg.CRPublishPath = *crPublishPath
+	cfg.MetricsBindAddr = *metricsBindAddr
 	return nil
 }
 
