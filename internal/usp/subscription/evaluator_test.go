@@ -1,6 +1,7 @@
 package subscription_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -146,6 +147,48 @@ func TestEvaluatorObjectDeletionFiresWhenSubscriptionInstalled(t *testing.T) {
 	}
 }
 
+func TestEvaluatorMalformedReferenceListLogged(t *testing.T) {
+	tree := loadEvaluatorTree(t)
+	adapter := newFakeAdapter()
+	var logBuf bytes.Buffer
+	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, capturingLogger(&logBuf, slog.LevelWarn))
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	// Default seed row 1 is Event NotifType. Clear its ReferenceList
+	// and assert a warn-log fires on the next rescan.
+	setSubField(t, tree, 1, "ReferenceList", "")
+	awaitRescan()
+
+	got := logBuf.String()
+	if !strings.Contains(got, "usp Subscription row skipped: empty ReferenceList") {
+		t.Errorf("expected warn log, got: %q", got)
+	}
+}
+
+func TestEvaluatorReferenceListEmptyForPeriodicIsAllowed(t *testing.T) {
+	tree := loadEvaluatorTree(t)
+	adapter := newFakeAdapter()
+	var logBuf bytes.Buffer
+	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, capturingLogger(&logBuf, slog.LevelWarn))
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	// Periodic + empty ReferenceList is valid (no value-change paths
+	// to scan; the interval alone drives the cadence). No warn.
+	setSubField(t, tree, 1, "NotifType", "Periodic")
+	setSubField(t, tree, 1, "ReferenceList", "")
+	awaitRescan()
+
+	if got := logBuf.String(); strings.Contains(got, "empty ReferenceList") {
+		t.Errorf("did not expect warn log for Periodic+empty RefList, got: %q", got)
+	}
+}
+
 func loadEvaluatorTree(t *testing.T) *paramtree.Tree {
 	t.Helper()
 	p, err := paramtree.LoadProfileFromReader(strings.NewReader(evaluatorProfile), "<test>")
@@ -170,6 +213,13 @@ func awaitRescan() {
 
 func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
+}
+
+// capturingLogger returns a Logger writing to the supplied buffer at
+// the given minimum level. Used by tests that assert specific
+// warn-level messages were emitted.
+func capturingLogger(buf *bytes.Buffer, level slog.Level) *slog.Logger {
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: level}))
 }
 
 type fakeAdapter struct {

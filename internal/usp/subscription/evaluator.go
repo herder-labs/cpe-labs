@@ -102,7 +102,7 @@ func (e *Evaluator) Start(ctx context.Context) error {
 
 	e.Tree.OnWrite(func(paths []string, _ paramtree.WriteKind) {
 		for _, p := range paths {
-			if strings.HasPrefix(p, SubscriptionTablePath+".") || strings.HasPrefix(p, SubscriptionTablePath+"#") {
+			if strings.HasPrefix(p, SubscriptionTablePath+".") {
 				e.queueRescan()
 				return
 			}
@@ -223,6 +223,14 @@ func (e *Evaluator) scanTable() []subscriptionRef {
 			NotifType:     e.readLeaf(row + "NotifType"),
 			ReferenceList: parseReferenceList(e.readLeaf(row + "ReferenceList")),
 			Recipient:     e.readLeaf(row + "Recipient"),
+		}
+		// Periodic legitimately allows an empty ReferenceList (no
+		// value-change paths to scan; just an interval). Every other
+		// NotifType is meaningless without a ReferenceList.
+		if ref.NotifType != "" && ref.NotifType != NotifPeriodic && len(ref.ReferenceList) == 0 {
+			e.Logger.Warn("usp Subscription row skipped: empty ReferenceList",
+				"row", row, "notif_type", ref.NotifType, "id", ref.ID)
+			continue
 		}
 		out = append(out, ref)
 	}
