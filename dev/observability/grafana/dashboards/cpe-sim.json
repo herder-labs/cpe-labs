@@ -1,0 +1,173 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "CPEs by lifecycle state",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "horizontal",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "sum by (lifecycle_state) (cpe_sim_fleet_cpes_by_state)",
+          "legendFormat": "{{lifecycle_state}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Inform rate (per sec, by event_code)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 16, "x": 8, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "displayMode": "table", "placement": "right"}},
+      "targets": [
+        {
+          "expr": "sum by (event_code, result) (rate(cpe_sim_cwmp_informs_total[1m]))",
+          "legendFormat": "{{event_code}} ({{result}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Bootstraps (cumulative) and failed sessions",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "targets": [
+        {"expr": "cpe_sim_fleet_bootstraps_total", "legendFormat": "bootstraps", "refId": "A"},
+        {"expr": "cpe_sim_fleet_failed_sessions_total", "legendFormat": "failed", "refId": "B"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Autonomous Notifies (USP, per sec by kind)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "sum by (notify_kind) (rate(cpe_sim_usp_autonomous_notifies_total[1m]))",
+          "legendFormat": "{{notify_kind}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "USP request RTT (p50 / p95 / p99 by msg_type)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, msg_type) (rate(cpe_sim_usp_request_rtt_seconds_bucket[1m])))",
+          "legendFormat": "p50 {{msg_type}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, msg_type) (rate(cpe_sim_usp_request_rtt_seconds_bucket[1m])))",
+          "legendFormat": "p95 {{msg_type}}",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, msg_type) (rate(cpe_sim_usp_request_rtt_seconds_bucket[1m])))",
+          "legendFormat": "p99 {{msg_type}}",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "CWMP faults (per sec by code)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "sum by (code) (rate(cpe_sim_rpc_faults_total[1m]))",
+          "legendFormat": "code={{code}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Heap allocated (bytes)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 22},
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "targets": [
+        {"expr": "cpe_sim_process_heap_alloc_bytes", "legendFormat": "heap", "refId": "A"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Goroutines",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 22},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "targets": [
+        {"expr": "cpe_sim_process_goroutines", "legendFormat": "goroutines", "refId": "A"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Open file descriptors",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 22},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "targets": [
+        {"expr": "cpe_sim_process_fd_count", "legendFormat": "fds ({{os}})", "refId": "A"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Periodic ticks fired (per sec)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 29},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "targets": [
+        {"expr": "rate(cpe_sim_fleet_periodic_ticks_total[1m])", "legendFormat": "ticks/s", "refId": "A"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "MQTT broker connection state",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 29},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "sum by (broker, state) (cpe_sim_usp_mqtt_connection_state)",
+          "legendFormat": "{{broker}} / {{state}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["cpe-sim", "observability"],
+  "templating": {"list": []},
+  "time": {"from": "now-15m", "to": "now"},
+  "timezone": "",
+  "title": "cpe-sim",
+  "uid": "cpe-sim",
+  "version": 1,
+  "weekStart": ""
+}
