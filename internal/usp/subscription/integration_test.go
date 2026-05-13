@@ -38,7 +38,7 @@ func setupIntegration(t *testing.T, withScheduler bool) (*paramtree.Tree, *subsc
 		})
 	}
 
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", sched, "cpe-1", nil, silentLogger())
+	e := subscription.New(tree, adapter, "os::A", "self::herder", sched, "cpe-1", nil, silentLogger())
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("evaluator.Start: %v", err)
 	}

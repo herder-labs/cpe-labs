@@ -106,7 +106,7 @@ func TestGetCPEDetail(t *testing.T) {
 		lastName: "2 PERIODIC", lastAt: time.Unix(1700000000, 0).UTC(),
 		events: []EventTail{{Name: "0 BOOTSTRAP", At: time.Unix(1699999000, 0).UTC()}},
 		tree:   map[string]string{"Device.DeviceInfo.Manufacturer": "ACME"},
-		subs:   []USPSubscription{{ID: "1", NotifType: "ValueChange", ReferenceList: "Device.WiFi.SSID", Recipient: "self::openacs"}},
+		subs:   []USPSubscription{{ID: "1", NotifType: "ValueChange", ReferenceList: "Device.WiFi.SSID", Recipient: "self::herder"}},
 	}
 	srv := newTestServer(t, []CPEStackInspector{stack}, nil, nil)
 	defer srv.Close()

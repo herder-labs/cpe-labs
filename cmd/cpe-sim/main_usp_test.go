@@ -85,7 +85,7 @@ fleet:
 
 usp:
   enable: true
-  controllerEndpointID: "self::openacs"
+  controllerEndpointID: "self::herder"
   broker:
     address: %s
     port: %d
@@ -114,8 +114,8 @@ usp:
 		if record.GetFromId() != "os::AABBCCUSP-INTEGRATION-1" {
 			t.Errorf("FromId=%q want os::AABBCCUSP-INTEGRATION-1", record.GetFromId())
 		}
-		if record.GetToId() != "self::openacs" {
-			t.Errorf("ToId=%q want self::openacs", record.GetToId())
+		if record.GetToId() != "self::herder" {
+			t.Errorf("ToId=%q want self::herder", record.GetToId())
 		}
 		req := msg.GetBody().GetRequest().GetNotify().GetOnBoardReq()
 		if req == nil {

@@ -22,7 +22,7 @@ func TestValidateAcceptsAllSchemes(t *testing.T) {
 		{"oui::AABBCC-1"},
 		{"cid::ACME"},
 		{"pen::32473"},
-		{"self::openacs"},
+		{"self::herder"},
 		{"user::alice"},
 		{"os::AABBCCDDEEFF"},
 		{"ops::node-1"},
@@ -72,8 +72,8 @@ func TestValidateRejectsEmptyHalves(t *testing.T) {
 }
 
 func TestValidateAcceptsColonsInIDHalf(t *testing.T) {
-	if err := Validate("self::openacs::primary"); err != nil {
-		t.Fatalf("self::openacs::primary should be valid: %v", err)
+	if err := Validate("self::herder::primary"); err != nil {
+		t.Fatalf("self::herder::primary should be valid: %v", err)
 	}
 }
 

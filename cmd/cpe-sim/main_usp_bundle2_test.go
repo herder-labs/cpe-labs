@@ -76,7 +76,7 @@ fleet:
 
 usp:
   enable: true
-  controllerEndpointID: "self::openacs"
+  controllerEndpointID: "self::herder"
   broker:
     address: %s
     port: %d
@@ -86,7 +86,7 @@ usp:
 	}
 
 	const agentEID = "os::AABBCCBUNDLE2"
-	const controllerEID = "self::openacs"
+	const controllerEID = "self::herder"
 	hub := newControllerHub(t, brokerHost, brokerPort)
 	defer hub.disconnect()
 

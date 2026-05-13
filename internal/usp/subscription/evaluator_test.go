@@ -41,7 +41,7 @@ usp:
 func TestEvaluatorPicksUpDefaultSeedBootEventSubscription(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, silentLogger())
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestEvaluatorPicksUpDefaultSeedBootEventSubscription(t *testing.T) {
 func TestEvaluatorValueChangeSubscriptionFires(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, silentLogger())
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestEvaluatorValueChangeSubscriptionFires(t *testing.T) {
 func TestEvaluatorObjectCreationSuppressedWhenNoMatch(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, silentLogger())
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestEvaluatorObjectCreationSuppressedWhenNoMatch(t *testing.T) {
 func TestEvaluatorObjectCreationFiresWhenSubscriptionInstalled(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, silentLogger())
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestEvaluatorObjectCreationFiresWhenSubscriptionInstalled(t *testing.T) {
 func TestEvaluatorObjectDeletionFiresWhenSubscriptionInstalled(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, silentLogger())
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestEvaluatorObjectDeletionFiresWhenSubscriptionInstalled(t *testing.T) {
 func TestEvaluatorRuntimeAddOnSubscriptionTable(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, silentLogger())
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestEvaluatorRuntimeAddOnSubscriptionTable(t *testing.T) {
 func TestEvaluatorRuntimeSetDisablesRow(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, silentLogger())
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestEvaluatorRuntimeSetDisablesRow(t *testing.T) {
 func TestEvaluatorRuntimeEnableToggle(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, silentLogger())
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestEvaluatorRuntimeEnableToggle(t *testing.T) {
 func TestEvaluatorRuntimeDeleteRow(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, silentLogger())
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -307,7 +307,7 @@ func newPeriodicTestEvaluator(t *testing.T, tree *paramtree.Tree, adapter *fakeA
 		defer cancel()
 		_ = sched.Stop(ctx)
 	})
-	return subscription.New(tree, adapter, "os::A", "self::openacs", sched, "cpe-1", nil, silentLogger())
+	return subscription.New(tree, adapter, "os::A", "self::herder", sched, "cpe-1", nil, silentLogger())
 }
 
 func TestEvaluatorRuntimeDeletePeriodicCancelsTimer(t *testing.T) {
@@ -417,7 +417,7 @@ func TestEvaluatorRuntimeNotifTypeChange(t *testing.T) {
 func TestEvaluatorOnWriteHookNotDuplicatedOnRestart(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, silentLogger())
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start 1: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestEvaluatorOnWriteHookNotDuplicatedOnRestart(t *testing.T) {
 func TestEvaluatorStopDisablesHook(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, silentLogger())
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestEvaluatorMalformedReferenceListLogged(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
 	var logBuf syncBuffer
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, capturingLogger(&logBuf, slog.LevelWarn))
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, capturingLogger(&logBuf, slog.LevelWarn))
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -505,7 +505,7 @@ func TestEvaluatorReferenceListEmptyForPeriodicIsAllowed(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
 	var logBuf syncBuffer
-	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, capturingLogger(&logBuf, slog.LevelWarn))
+	e := subscription.New(tree, adapter, "os::A", "self::herder", nil, "cpe-1", nil, capturingLogger(&logBuf, slog.LevelWarn))
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

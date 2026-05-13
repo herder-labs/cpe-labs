@@ -139,7 +139,7 @@ Run with `--log-level=debug` to see every SOAP request/response body. The struct
 ### One-shot smoke test (verify ACS handshakes)
 
 ```yaml
-# .github/workflows/openacs-smoke.yml (excerpt)
+# .github/workflows/herder-smoke.yml (excerpt)
 - run: |
     docker run --rm --network=host herderlabs/cpe-sim \
       --profile=/profiles/example-tr181-gateway/ \

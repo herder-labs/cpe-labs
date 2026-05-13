@@ -346,7 +346,7 @@ Turns the TR-369 USP role on for this CPE. When `enable: true`, cpe-labs builds 
 | `endpointID.scheme` | string | TR-369 §2.2 R-ARC.2a authority scheme. Default `os`. Accepted: `oui` / `cid` / `pen` / `self` / `user` / `os` / `ops` / `uuid` / `imei` / `proto` / `doc` / `fqdn`. |
 | `endpointID.ouiPath` | tree path | Leaf carrying the manufacturer OUI. Default `Device.DeviceInfo.ManufacturerOUI`. Must resolve to a `xsd:string` leaf in the merged tree. |
 | `endpointID.serialPath` | tree path | Leaf carrying the device serial. Default `Device.DeviceInfo.SerialNumber`. Same type constraint. |
-| `controllerEndpointID` | string | TR-369 endpoint ID of the controller. Default `self::openacs`. Must contain `::` (full TR-369 §2.2 validation runs at session startup). |
+| `controllerEndpointID` | string | TR-369 endpoint ID of the controller. Default `self::herder`. Must contain `::` (full TR-369 §2.2 validation runs at session startup). |
 | `broker.address` | string | MQTT broker host. **Required when `enable: true`.** |
 | `broker.port` | int | MQTT broker TCP port. Default `1883`. |
 | `broker.protocolVersion` | string | Locked to `"3.1.1"` in v0. The NATS-native broker bridged by the reference controller does not implement MQTT 5.0. |
@@ -363,7 +363,7 @@ usp:
     scheme: os
     ouiPath: Device.DeviceInfo.ManufacturerOUI
     serialPath: Device.DeviceInfo.SerialNumber
-  controllerEndpointID: "self::openacs"
+  controllerEndpointID: "self::herder"
   broker:
     address: nats
     port: 1883

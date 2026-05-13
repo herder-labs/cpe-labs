@@ -29,7 +29,7 @@ usp:
     scheme: os
     ouiPath: Device.DeviceInfo.ManufacturerOUI
     serialPath: Device.DeviceInfo.SerialNumber
-  controllerEndpointID: "self::openacs"
+  controllerEndpointID: "self::herder"
   broker:
     address: nats
     port: 1883
@@ -46,7 +46,7 @@ usp:
 	if p.USP.Broker.Address != "nats" || p.USP.Broker.Port != 1883 || p.USP.Broker.ProtocolVersion != "3.1.1" {
 		t.Fatalf("Broker=%+v", p.USP.Broker)
 	}
-	if p.USP.ControllerEndpointID != "self::openacs" {
+	if p.USP.ControllerEndpointID != "self::herder" {
 		t.Fatalf("ControllerEndpointID=%q", p.USP.ControllerEndpointID)
 	}
 	if p.USP.EndpointID.Scheme != "os" {
@@ -78,7 +78,7 @@ usp:
 	if p.USP.Broker.KeepAliveSeconds != 60 {
 		t.Fatalf("KeepAliveSeconds default = %d want 60", p.USP.Broker.KeepAliveSeconds)
 	}
-	if p.USP.ControllerEndpointID != "self::openacs" {
+	if p.USP.ControllerEndpointID != "self::herder" {
 		t.Fatalf("ControllerEndpointID default = %q", p.USP.ControllerEndpointID)
 	}
 	if p.USP.EndpointID.OUIPath != "Device.DeviceInfo.ManufacturerOUI" {

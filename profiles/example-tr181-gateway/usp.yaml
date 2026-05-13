@@ -18,7 +18,7 @@ usp:
     ouiPath: Device.DeviceInfo.ManufacturerOUI
     serialPath: Device.DeviceInfo.SerialNumber
 
-  controllerEndpointID: "self::openacs"
+  controllerEndpointID: "self::herder"
 
   broker:
     address: nats

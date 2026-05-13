@@ -13,7 +13,7 @@ import (
 func TestWrapMessageRoundTrip(t *testing.T) {
 	in := buildOnBoardNotify("AABBCC", "GenericGateway", "AABBCCDDEEFF", "1.5")
 
-	bytes, err := WrapMessage(in, "os::AABBCCDDEEFF", "self::openacs")
+	bytes, err := WrapMessage(in, "os::AABBCCDDEEFF", "self::herder")
 	if err != nil {
 		t.Fatalf("WrapMessage: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestWrapMessageRoundTrip(t *testing.T) {
 	if record.GetFromId() != "os::AABBCCDDEEFF" {
 		t.Fatalf("FromId=%q", record.GetFromId())
 	}
-	if record.GetToId() != "self::openacs" {
+	if record.GetToId() != "self::herder" {
 		t.Fatalf("ToId=%q", record.GetToId())
 	}
 	if record.GetPayloadSecurity() != uspproto.Record_PLAINTEXT {
@@ -69,7 +69,7 @@ func TestUnwrapRecordRejectsMalformedBytes(t *testing.T) {
 func TestUnwrapRecordRejectsWrongVersion(t *testing.T) {
 	record := &uspproto.Record{
 		Version:         "9.9",
-		ToId:            "self::openacs",
+		ToId:            "self::herder",
 		FromId:          "os::A",
 		PayloadSecurity: uspproto.Record_PLAINTEXT,
 		RecordType: &uspproto.Record_NoSessionContext{
@@ -87,7 +87,7 @@ func TestUnwrapRecordRejectsWrongVersion(t *testing.T) {
 func TestUnwrapRecordRejectsNonPlaintextSecurity(t *testing.T) {
 	record := &uspproto.Record{
 		Version:         RecordVersion,
-		ToId:            "self::openacs",
+		ToId:            "self::herder",
 		FromId:          "os::A",
 		PayloadSecurity: uspproto.Record_TLS12,
 		RecordType: &uspproto.Record_NoSessionContext{
@@ -105,7 +105,7 @@ func TestUnwrapRecordRejectsNonPlaintextSecurity(t *testing.T) {
 func TestUnwrapRecordRejectsMissingNoSessionContext(t *testing.T) {
 	record := &uspproto.Record{
 		Version:         RecordVersion,
-		ToId:            "self::openacs",
+		ToId:            "self::herder",
 		FromId:          "os::A",
 		PayloadSecurity: uspproto.Record_PLAINTEXT,
 	}

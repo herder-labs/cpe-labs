@@ -364,7 +364,7 @@ type USPConfig struct {
 	EndpointID USPEndpointIDConfig
 
 	// ControllerEndpointID is the TR-369 endpoint ID of the controller
-	// the agent talks to. Default "self::openacs" matches the reference
+	// the agent talks to. Default "self::herder" matches the reference
 	// controller's USP_CONTROLLER_ID env var default.
 	ControllerEndpointID string
 
@@ -1487,7 +1487,7 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 
 		controllerEID := strings.TrimSpace(raw.ControllerEndpointID)
 		if controllerEID == "" {
-			controllerEID = "self::openacs"
+			controllerEID = "self::herder"
 		}
 		dataModels := raw.DataModels
 		if len(dataModels) == 0 {

@@ -139,7 +139,7 @@ func sessionOpts(tree *paramtree.Tree, fa *fakeAdapter) session.Options {
 		Tree:          tree,
 		Adapter:       fa,
 		AgentEID:      "os::001122SN123",
-		ControllerEID: "self::openacs",
+		ControllerEID: "self::herder",
 	}
 }
 

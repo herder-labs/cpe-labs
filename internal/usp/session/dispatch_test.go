@@ -181,8 +181,8 @@ func TestDispatchResponseRecordCarriesAgentAndControllerEIDs(t *testing.T) {
 	if record.GetFromId() != "os::001122SN123" {
 		t.Fatalf("FromId=%q want os::001122SN123", record.GetFromId())
 	}
-	if record.GetToId() != "self::openacs" {
-		t.Fatalf("ToId=%q want self::openacs", record.GetToId())
+	if record.GetToId() != "self::herder" {
+		t.Fatalf("ToId=%q want self::herder", record.GetToId())
 	}
 
 	cancel()
@@ -197,7 +197,7 @@ func wrapRequest(t *testing.T, msgID string, msgType uspproto.Header_MsgType, bo
 		Header: &uspproto.Header{MsgId: msgID, MsgType: msgType},
 		Body:   body,
 	}
-	bytes, err := codec.WrapMessage(msg, "self::openacs", "os::001122SN123")
+	bytes, err := codec.WrapMessage(msg, "self::herder", "os::001122SN123")
 	if err != nil {
 		t.Fatalf("wrapRequest: %v", err)
 	}
