@@ -1349,12 +1349,20 @@ func buildTransferScheduler(sched *scheduler.Scheduler, cpeID string, tracker *c
 }
 
 // pendingScheduledCancels is the per-CPE holder for in-flight
-// scheduled-reboot / scheduled-factory-reset cancel funcs. The fields
-// are read/written under the per-CPE SessionMu (handler invocation
-// holds it; scheduler.ScheduleOnce re-acquires it before invoking the
-// fired fn). Repeat scheduling supersedes the previous in-flight
-// schedule rather than queuing two.
-type pendingScheduledCancels = struct {
+// scheduled-reboot / scheduled-factory-reset cancel funcs. Repeat
+// scheduling supersedes the previous in-flight schedule rather than
+// queuing two.
+//
+// mu protects the three function pointers. The CWMP Reboot /
+// FactoryReset handler paths already serialize via SessionMu (the
+// handler runs under it, and the scheduler re-acquires it before
+// the fired fn runs), so concurrent access on those was rare. But
+// the USP Operate(Reboot) handler runs on the USP receive-goroutine
+// without SessionMu, so two back-to-back Operate(Reboot) messages
+// race on cancels.uspReboot. The mutex closes that gap for every
+// callback path consistently.
+type pendingScheduledCancels struct {
+	mu           sync.Mutex
 	reboot       func()
 	factoryReset func()
 	uspReboot    func()
@@ -1374,6 +1382,7 @@ type pendingScheduledCancels = struct {
 // transfer scheduler).
 func buildRebootScheduler(sched *scheduler.Scheduler, cpeID string, tracker *cwmp.EventTracker, delay time.Duration, runOpts *cwmp.RunSessionOptions, cancels *pendingScheduledCancels, logger *slog.Logger) handlers.RebootSchedule {
 	return func(commandKey string) {
+		cancels.mu.Lock()
 		if cancels.reboot != nil {
 			logger.Debug("scheduled reboot superseded by new RPC", "cpe_id", cpeID)
 			cancels.reboot()
@@ -1382,7 +1391,9 @@ func buildRebootScheduler(sched *scheduler.Scheduler, cpeID string, tracker *cwm
 		logger.Debug("scheduled reboot enqueued",
 			"cpe_id", cpeID, "command_key", commandKey, "delay", delay.String())
 		cancels.reboot = sched.ScheduleOnce(cpeID, delay, func(_ context.Context) error {
+			cancels.mu.Lock()
 			cancels.reboot = nil
+			cancels.mu.Unlock()
 			tracker.QueueMethodReboot(commandKey)
 			if runOpts.Session == nil {
 				logger.Warn("scheduled reboot: session not yet constructed",
@@ -1402,6 +1413,7 @@ func buildRebootScheduler(sched *scheduler.Scheduler, cpeID string, tracker *cwm
 				"duration", time.Since(start).String())
 			return nil
 		})
+		cancels.mu.Unlock()
 	}
 }
 
@@ -1414,6 +1426,7 @@ func buildRebootScheduler(sched *scheduler.Scheduler, cpeID string, tracker *cwm
 // onReset).
 func buildFactoryResetScheduler(sched *scheduler.Scheduler, cpeID string, delay time.Duration, runOpts *cwmp.RunSessionOptions, cancels *pendingScheduledCancels, logger *slog.Logger) handlers.FactoryResetSchedule {
 	return func(onReset func() error) {
+		cancels.mu.Lock()
 		if cancels.factoryReset != nil {
 			logger.Debug("scheduled factory reset superseded by new RPC", "cpe_id", cpeID)
 			cancels.factoryReset()
@@ -1422,7 +1435,9 @@ func buildFactoryResetScheduler(sched *scheduler.Scheduler, cpeID string, delay 
 		logger.Debug("scheduled factory reset enqueued",
 			"cpe_id", cpeID, "delay", delay.String())
 		cancels.factoryReset = sched.ScheduleOnce(cpeID, delay, func(_ context.Context) error {
+			cancels.mu.Lock()
 			cancels.factoryReset = nil
+			cancels.mu.Unlock()
 			if onReset != nil {
 				if err := onReset(); err != nil {
 					logger.Warn("scheduled factory reset onReset failed",
@@ -1447,6 +1462,7 @@ func buildFactoryResetScheduler(sched *scheduler.Scheduler, cpeID string, delay 
 				"duration", time.Since(start).String())
 			return nil
 		})
+		cancels.mu.Unlock()
 	}
 }
 
@@ -1603,6 +1619,8 @@ func buildUSPRebootCallback(sched *scheduler.Scheduler, cpeID string, tree *para
 		if err := tree.SetSystem(uspsession.RebootCausePath, uspsession.RebootCauseLocalBoot); err != nil {
 			logger.Warn("usp reboot: flip Internal.Reboot.Cause failed", "err", err.Error())
 		}
+		cancels.mu.Lock()
+		defer cancels.mu.Unlock()
 		if cancels.uspReboot != nil {
 			logger.Debug("usp scheduled reboot superseded by new RPC", "cpe_id", cpeID)
 			cancels.uspReboot()
@@ -1610,6 +1628,9 @@ func buildUSPRebootCallback(sched *scheduler.Scheduler, cpeID string, tree *para
 		}
 		logger.Debug("usp reboot scheduled", "cpe_id", cpeID, "delay", delay.String())
 		cancels.uspReboot = sched.ScheduleOnce(cpeID+":usp-reboot", delay, func(_ context.Context) error {
+			cancels.mu.Lock()
+			cancels.uspReboot = nil
+			cancels.mu.Unlock()
 			evaluator.FireEvent("Device.Boot!")
 			return nil
 		})
