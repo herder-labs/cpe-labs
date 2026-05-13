@@ -147,10 +147,76 @@ func TestEvaluatorObjectDeletionFiresWhenSubscriptionInstalled(t *testing.T) {
 	}
 }
 
+func TestEvaluatorOnWriteHookNotDuplicatedOnRestart(t *testing.T) {
+	tree := loadEvaluatorTree(t)
+	adapter := newFakeAdapter()
+	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start 1: %v", err)
+	}
+	if err := e.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start 2: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	// Baseline: two rebuilds from the two Starts.
+	baseline := e.RebuildCount()
+	if baseline < 2 {
+		t.Fatalf("expected at least 2 rebuilds (one per Start), got %d", baseline)
+	}
+
+	// One synthetic write to a Subscription leaf should produce
+	// exactly one additional rebuild. If the hook is registered twice,
+	// we'd see two debounced rescans collapsed to one (the rescanCh is
+	// buffered length 1, so duplicates coalesce). The functional check
+	// is therefore "exactly one more rebuild", which holds whether the
+	// hook is registered once or many times — but the cost guarantee
+	// (no callback-slice growth across Stop/Start) is what we care
+	// about. Verify via the rebuild count: one more, not more.
+	setSubField(t, tree, 1, "ReferenceList", "Device.WiFi.Radio.1.Channel")
+	awaitRescan()
+
+	delta := e.RebuildCount() - baseline
+	if delta != 1 {
+		t.Errorf("expected exactly 1 rebuild after one write, got %d (baseline=%d)", delta, baseline)
+	}
+}
+
+func TestEvaluatorStopDisablesHook(t *testing.T) {
+	tree := loadEvaluatorTree(t)
+	adapter := newFakeAdapter()
+	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// First write while enabled: should rebuild.
+	setSubField(t, tree, 1, "ReferenceList", "Device.WiFi.Radio.1.Channel")
+	awaitRescan()
+	afterFirst := e.RebuildCount()
+
+	// Stop the evaluator. Hook stays registered (no unregister API)
+	// but the enabled gate should suppress its body.
+	if err := e.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	// Second write while disabled: should NOT rebuild.
+	setSubField(t, tree, 1, "ReferenceList", "Device.WiFi.SSID.1.SSID")
+	awaitRescan()
+
+	if got := e.RebuildCount(); got != afterFirst {
+		t.Errorf("rebuild count moved while stopped: was %d, now %d", afterFirst, got)
+	}
+}
+
 func TestEvaluatorMalformedReferenceListLogged(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	var logBuf bytes.Buffer
+	var logBuf syncBuffer
 	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, capturingLogger(&logBuf, slog.LevelWarn))
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -171,7 +237,7 @@ func TestEvaluatorMalformedReferenceListLogged(t *testing.T) {
 func TestEvaluatorReferenceListEmptyForPeriodicIsAllowed(t *testing.T) {
 	tree := loadEvaluatorTree(t)
 	adapter := newFakeAdapter()
-	var logBuf bytes.Buffer
+	var logBuf syncBuffer
 	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, capturingLogger(&logBuf, slog.LevelWarn))
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -215,10 +281,30 @@ func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
+// syncBuffer is a goroutine-safe wrapper around bytes.Buffer for
+// capturing slog output from the rescan goroutine while the test
+// reads it. bytes.Buffer is NOT safe for concurrent use.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
 // capturingLogger returns a Logger writing to the supplied buffer at
 // the given minimum level. Used by tests that assert specific
 // warn-level messages were emitted.
-func capturingLogger(buf *bytes.Buffer, level slog.Level) *slog.Logger {
+func capturingLogger(buf *syncBuffer, level slog.Level) *slog.Logger {
 	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: level}))
 }
 

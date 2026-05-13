@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/herder-labs/cpe-labs/internal/cwmp/scheduler"
@@ -52,6 +53,18 @@ type Evaluator struct {
 	started         bool
 
 	rescanCh chan struct{}
+
+	// hookOnce ensures the Tree.OnWrite callback is registered
+	// exactly once for the evaluator's lifetime. The tree has no
+	// unregister API, so Stop/Start cycles otherwise leak callbacks.
+	hookOnce sync.Once
+	// enabled gates the hook body. Toggled by Start (true) and Stop
+	// (false). A disabled hook is a no-op; rescans only happen while
+	// the evaluator is running.
+	enabled atomic.Bool
+	// rebuildCount is incremented at the start of every rebuild for
+	// test visibility. Not part of the public contract.
+	rebuildCount atomic.Int64
 }
 
 type subscriptionRef struct {
@@ -100,14 +113,8 @@ func (e *Evaluator) Start(ctx context.Context) error {
 	e.started = true
 	e.mu.Unlock()
 
-	e.Tree.OnWrite(func(paths []string, _ paramtree.WriteKind) {
-		for _, p := range paths {
-			if strings.HasPrefix(p, SubscriptionTablePath+".") {
-				e.queueRescan()
-				return
-			}
-		}
-	})
+	e.enabled.Store(true)
+	e.registerTreeHookOnce()
 
 	e.rebuild()
 
@@ -115,9 +122,34 @@ func (e *Evaluator) Start(ctx context.Context) error {
 	return nil
 }
 
+// RebuildCount returns how many times rebuild() has run on this
+// evaluator since construction. Test affordance for asserting hook
+// activity; not part of the wire-level contract.
+func (e *Evaluator) RebuildCount() int64 { return e.rebuildCount.Load() }
+
+// registerTreeHookOnce installs the Tree.OnWrite filter. The callback
+// body checks e.enabled before queueing a rescan, so Stop/Start cycles
+// flip the gate without leaking extra registrations.
+func (e *Evaluator) registerTreeHookOnce() {
+	e.hookOnce.Do(func() {
+		e.Tree.OnWrite(func(paths []string, _ paramtree.WriteKind) {
+			if !e.enabled.Load() {
+				return
+			}
+			for _, p := range paths {
+				if strings.HasPrefix(p, SubscriptionTablePath+".") {
+					e.queueRescan()
+					return
+				}
+			}
+		})
+	})
+}
+
 // Stop cancels all in-flight Periodic scheduler entries. Safe to call
 // even if Start was never invoked.
 func (e *Evaluator) Stop(_ context.Context) error {
+	e.enabled.Store(false)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, cancel := range e.periodicCancels {
@@ -162,6 +194,7 @@ func (e *Evaluator) runRescanLoop(ctx context.Context) {
 // rebuild walks the Subscription table from the tree and rebuilds the
 // trigger indices. Idempotent; safe to call repeatedly.
 func (e *Evaluator) rebuild() {
+	e.rebuildCount.Add(1)
 	subs := e.scanTable()
 	vc := map[string][]subscriptionRef{}
 	oc := map[string][]subscriptionRef{}
@@ -277,7 +310,7 @@ func (e *Evaluator) NotifyValueChange(path, raw string) {
 // least one enabled Subscription's ReferenceList covers the path's
 // prefix.
 func (e *Evaluator) NotifyObjectCreated(objPath string, uniqueKeys map[string]string) {
-	matches := e.matchPrefix(e.snapshot(e.objectCreation), objPath)
+	matches := e.matchPrefix(e.snapshotIndex(indexObjectCreation), objPath)
 	if len(matches) == 0 {
 		e.Logger.Debug("usp ObjectCreation suppressed (no matching subscription)", "obj_path", objPath)
 		return
@@ -297,7 +330,7 @@ func (e *Evaluator) NotifyObjectCreated(objPath string, uniqueKeys map[string]st
 // least one enabled Subscription's ReferenceList covers the path's
 // prefix.
 func (e *Evaluator) NotifyObjectDeleted(objPath string) {
-	matches := e.matchPrefix(e.snapshot(e.objectDeletion), objPath)
+	matches := e.matchPrefix(e.snapshotIndex(indexObjectDeletion), objPath)
 	if len(matches) == 0 {
 		e.Logger.Debug("usp ObjectDeletion suppressed (no matching subscription)", "obj_path", objPath)
 		return
@@ -330,9 +363,33 @@ func (e *Evaluator) FireEvent(eventName string) {
 	}
 }
 
-func (e *Evaluator) snapshot(m map[string][]subscriptionRef) map[string][]subscriptionRef {
+type indexKind int
+
+const (
+	indexValueChange indexKind = iota
+	indexObjectCreation
+	indexObjectDeletion
+	indexEvent
+)
+
+// snapshotIndex copies the named trigger index under the read lock so
+// callers can iterate without holding the lock and without racing
+// against rebuild()'s reassignment of the map field. Replaces the
+// older snapshot(map) helper whose argument was read outside the lock.
+func (e *Evaluator) snapshotIndex(kind indexKind) map[string][]subscriptionRef {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+	var m map[string][]subscriptionRef
+	switch kind {
+	case indexValueChange:
+		m = e.valueChange
+	case indexObjectCreation:
+		m = e.objectCreation
+	case indexObjectDeletion:
+		m = e.objectDeletion
+	case indexEvent:
+		m = e.eventIdx
+	}
 	out := make(map[string][]subscriptionRef, len(m))
 	for k, v := range m {
 		out[k] = append([]subscriptionRef(nil), v...)
