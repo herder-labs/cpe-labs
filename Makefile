@@ -12,7 +12,7 @@ LDFLAGS := -X $(MODULE)/internal/version.Version=$(VERSION) \
            -X $(MODULE)/internal/version.Commit=$(COMMIT) \
            -X $(MODULE)/internal/version.Date=$(DATE)
 
-.PHONY: all build test test-race lint fmt vet tidy clean proto-gen
+.PHONY: all build test test-race acceptance acceptance-update lint fmt vet tidy clean proto-gen
 
 all: build
 
@@ -25,6 +25,19 @@ test:
 
 test-race:
 	go test -race ./...
+
+# acceptance runs the wire-format acceptance suite (build-tag gated).
+# Hermetic: embedded mochi-mqtt + httptest, no docker, no external services.
+# Builds cpe-sim once per invocation and exec's it per scenario.
+acceptance:
+	go test -tags=acceptance -timeout=10m ./acceptance/...
+
+# acceptance-update regenerates the golden fixtures. Inspect the
+# resulting diff before committing. The -args separator routes -update
+# to the test binary (it's a custom flag registered by the harness, not
+# a built-in go test flag).
+acceptance-update:
+	go test -tags=acceptance -timeout=10m ./acceptance/... -args -update
 
 lint:
 	golangci-lint run

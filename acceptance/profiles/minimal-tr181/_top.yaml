@@ -1,0 +1,28 @@
+# Minimal TR-181 acceptance profile. Deliberately stripped of every
+# non-deterministic feature (generators, client fabricators, jitter
+# sources beyond the required base) so the acceptance suite produces
+# byte-identical output across runs after normalization.
+#
+# Only the absolute minimum: DeviceId paths, a small inform-parameter
+# list, fleet count 1, no daemon-mode triggers. CWMP scenarios that
+# require periodic Informs or CR will extend this profile in their
+# own profile directory.
+
+deviceIdPaths:
+  manufacturer: Device.DeviceInfo.Manufacturer
+  oui:          Device.DeviceInfo.ManufacturerOUI
+  productClass: Device.DeviceInfo.ProductClass
+  serialNumber: Device.DeviceInfo.SerialNumber
+
+fleet:
+  count: 1
+  serialPattern: "{base}"
+
+informParameters:
+  bootstrap:
+    - Device.DeviceInfo.Manufacturer
+    - Device.DeviceInfo.ManufacturerOUI
+    - Device.DeviceInfo.ProductClass
+    - Device.DeviceInfo.SerialNumber
+    - Device.DeviceInfo.SoftwareVersion
+    - Device.DeviceInfo.HardwareVersion
