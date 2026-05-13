@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/herder-labs/cpe-labs/internal/cwmp/scheduler"
@@ -50,10 +51,22 @@ type Evaluator struct {
 	objectCreation  map[string][]subscriptionRef
 	objectDeletion  map[string][]subscriptionRef
 	eventIdx        map[string][]subscriptionRef
-	periodicCancels map[string]func()
+	periodicCancels map[string]*periodicEntry
 	started         bool
 
 	rescanCh chan struct{}
+
+	// hookOnce ensures the Tree.OnWrite callback is registered
+	// exactly once for the evaluator's lifetime. The tree has no
+	// unregister API, so Stop/Start cycles otherwise leak callbacks.
+	hookOnce sync.Once
+	// enabled gates the hook body. Toggled by Start (true) and Stop
+	// (false). A disabled hook is a no-op; rescans only happen while
+	// the evaluator is running.
+	enabled atomic.Bool
+	// rebuildCount is incremented at the start of every rebuild for
+	// test visibility. Not part of the public contract.
+	rebuildCount atomic.Int64
 }
 
 type subscriptionRef struct {
@@ -61,6 +74,14 @@ type subscriptionRef struct {
 	NotifType     string
 	ReferenceList []string
 	Recipient     string
+}
+
+// periodicEntry tracks an armed Periodic subscription. period is the
+// seconds value the timer was armed with so reschedulePeriodic can
+// detect a Period-leaf change and re-arm.
+type periodicEntry struct {
+	cancel func()
+	period int
 }
 
 // New returns an evaluator ready to Start.
@@ -84,7 +105,7 @@ func New(tree *paramtree.Tree, adapter mtp.Adapter, agentEID, controllerEID stri
 		objectCreation:  map[string][]subscriptionRef{},
 		objectDeletion:  map[string][]subscriptionRef{},
 		eventIdx:        map[string][]subscriptionRef{},
-		periodicCancels: map[string]func(){},
+		periodicCancels: map[string]*periodicEntry{},
 		rescanCh:        make(chan struct{}, 1),
 	}
 }
@@ -102,14 +123,8 @@ func (e *Evaluator) Start(ctx context.Context) error {
 	e.started = true
 	e.mu.Unlock()
 
-	e.Tree.OnWrite(func(paths []string, _ paramtree.WriteKind) {
-		for _, p := range paths {
-			if strings.HasPrefix(p, SubscriptionTablePath+".") || strings.HasPrefix(p, SubscriptionTablePath+"#") {
-				e.queueRescan()
-				return
-			}
-		}
-	})
+	e.enabled.Store(true)
+	e.registerTreeHookOnce()
 
 	e.rebuild()
 
@@ -117,17 +132,58 @@ func (e *Evaluator) Start(ctx context.Context) error {
 	return nil
 }
 
+// RebuildCount returns how many times rebuild() has run on this
+// evaluator since construction. Test affordance for asserting hook
+// activity; not part of the wire-level contract.
+func (e *Evaluator) RebuildCount() int64 { return e.rebuildCount.Load() }
+
+// PeriodicArmedPeriods returns a snapshot of {Subscription.ID -> period
+// in seconds} for every currently-armed Periodic timer. Test affordance
+// for asserting that reschedulePeriodic re-armed (or cancelled) the
+// right entries; not part of the wire-level contract.
+func (e *Evaluator) PeriodicArmedPeriods() map[string]int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make(map[string]int, len(e.periodicCancels))
+	for id, entry := range e.periodicCancels {
+		if entry != nil {
+			out[id] = entry.period
+		}
+	}
+	return out
+}
+
+// registerTreeHookOnce installs the Tree.OnWrite filter. The callback
+// body checks e.enabled before queueing a rescan, so Stop/Start cycles
+// flip the gate without leaking extra registrations.
+func (e *Evaluator) registerTreeHookOnce() {
+	e.hookOnce.Do(func() {
+		e.Tree.OnWrite(func(paths []string, _ paramtree.WriteKind) {
+			if !e.enabled.Load() {
+				return
+			}
+			for _, p := range paths {
+				if strings.HasPrefix(p, SubscriptionTablePath+".") {
+					e.queueRescan()
+					return
+				}
+			}
+		})
+	})
+}
+
 // Stop cancels all in-flight Periodic scheduler entries. Safe to call
 // even if Start was never invoked.
 func (e *Evaluator) Stop(_ context.Context) error {
+	e.enabled.Store(false)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for _, cancel := range e.periodicCancels {
-		if cancel != nil {
-			cancel()
+	for _, entry := range e.periodicCancels {
+		if entry != nil && entry.cancel != nil {
+			entry.cancel()
 		}
 	}
-	e.periodicCancels = map[string]func(){}
+	e.periodicCancels = map[string]*periodicEntry{}
 	e.started = false
 	return nil
 }
@@ -164,6 +220,7 @@ func (e *Evaluator) runRescanLoop(ctx context.Context) {
 // rebuild walks the Subscription table from the tree and rebuilds the
 // trigger indices. Idempotent; safe to call repeatedly.
 func (e *Evaluator) rebuild() {
+	e.rebuildCount.Add(1)
 	subs := e.scanTable()
 	vc := map[string][]subscriptionRef{}
 	oc := map[string][]subscriptionRef{}
@@ -226,6 +283,14 @@ func (e *Evaluator) scanTable() []subscriptionRef {
 			ReferenceList: parseReferenceList(e.readLeaf(row + "ReferenceList")),
 			Recipient:     e.readLeaf(row + "Recipient"),
 		}
+		// Periodic legitimately allows an empty ReferenceList (no
+		// value-change paths to scan; just an interval). Every other
+		// NotifType is meaningless without a ReferenceList.
+		if ref.NotifType != "" && ref.NotifType != NotifPeriodic && len(ref.ReferenceList) == 0 {
+			e.Logger.Warn("usp Subscription row skipped: empty ReferenceList",
+				"row", row, "notif_type", ref.NotifType, "id", ref.ID)
+			continue
+		}
 		out = append(out, ref)
 	}
 	return out
@@ -271,7 +336,7 @@ func (e *Evaluator) NotifyValueChange(path, raw string) {
 // least one enabled Subscription's ReferenceList covers the path's
 // prefix.
 func (e *Evaluator) NotifyObjectCreated(objPath string, uniqueKeys map[string]string) {
-	matches := e.matchPrefix(e.snapshot(e.objectCreation), objPath)
+	matches := e.matchPrefix(e.snapshotIndex(indexObjectCreation), objPath)
 	if len(matches) == 0 {
 		e.Logger.Debug("usp ObjectCreation suppressed (no matching subscription)", "obj_path", objPath)
 		return
@@ -291,7 +356,7 @@ func (e *Evaluator) NotifyObjectCreated(objPath string, uniqueKeys map[string]st
 // least one enabled Subscription's ReferenceList covers the path's
 // prefix.
 func (e *Evaluator) NotifyObjectDeleted(objPath string) {
-	matches := e.matchPrefix(e.snapshot(e.objectDeletion), objPath)
+	matches := e.matchPrefix(e.snapshotIndex(indexObjectDeletion), objPath)
 	if len(matches) == 0 {
 		e.Logger.Debug("usp ObjectDeletion suppressed (no matching subscription)", "obj_path", objPath)
 		return
@@ -324,9 +389,33 @@ func (e *Evaluator) FireEvent(eventName string) {
 	}
 }
 
-func (e *Evaluator) snapshot(m map[string][]subscriptionRef) map[string][]subscriptionRef {
+type indexKind int
+
+const (
+	indexValueChange indexKind = iota
+	indexObjectCreation
+	indexObjectDeletion
+	indexEvent
+)
+
+// snapshotIndex copies the named trigger index under the read lock so
+// callers can iterate without holding the lock and without racing
+// against rebuild()'s reassignment of the map field. Replaces the
+// older snapshot(map) helper whose argument was read outside the lock.
+func (e *Evaluator) snapshotIndex(kind indexKind) map[string][]subscriptionRef {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+	var m map[string][]subscriptionRef
+	switch kind {
+	case indexValueChange:
+		m = e.valueChange
+	case indexObjectCreation:
+		m = e.objectCreation
+	case indexObjectDeletion:
+		m = e.objectDeletion
+	case indexEvent:
+		m = e.eventIdx
+	}
 	out := make(map[string][]subscriptionRef, len(m))
 	for k, v := range m {
 		out[k] = append([]subscriptionRef(nil), v...)
@@ -367,34 +456,57 @@ func (e *Evaluator) reschedulePeriodic(subs []subscriptionRef) {
 
 	wanted := map[string]subscriptionRef{}
 	for _, s := range subs {
-		if s.NotifType == NotifPeriodic && s.ID != "" {
-			wanted[s.ID] = s
+		if s.NotifType != NotifPeriodic {
+			continue
 		}
+		if s.ID == "" {
+			e.Logger.Warn("usp Subscription Periodic skipped: empty ID")
+			continue
+		}
+		wanted[s.ID] = s
 	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	// Cancel periodic schedules that are no longer wanted.
-	for id, cancel := range e.periodicCancels {
+	for id, entry := range e.periodicCancels {
 		if _, keep := wanted[id]; !keep {
-			if cancel != nil {
-				cancel()
+			if entry != nil && entry.cancel != nil {
+				entry.cancel()
 			}
 			delete(e.periodicCancels, id)
 		}
 	}
 
-	// Arm new periodic schedules.
+	// Arm or re-arm periodic schedules. An existing entry whose
+	// Period changed must be cancelled and re-armed; one whose
+	// Period is unchanged is left alone.
 	for id, s := range wanted {
-		if _, exists := e.periodicCancels[id]; exists {
+		desired := e.readPeriodSeconds(id)
+		if desired <= 0 {
+			if existing, ok := e.periodicCancels[id]; ok {
+				if existing != nil && existing.cancel != nil {
+					existing.cancel()
+				}
+				delete(e.periodicCancels, id)
+			}
+			e.Logger.Warn("usp Subscription Periodic skipped: invalid Period",
+				"sub_id", id)
 			continue
 		}
-		period := e.readPeriodSeconds(id)
-		if period <= 0 {
-			continue
+		if existing, ok := e.periodicCancels[id]; ok && existing != nil {
+			if existing.period == desired {
+				continue
+			}
+			if existing.cancel != nil {
+				existing.cancel()
+			}
 		}
-		e.periodicCancels[id] = e.armPeriodic(id, s, period)
+		e.periodicCancels[id] = &periodicEntry{
+			cancel: e.armPeriodic(id, s, desired),
+			period: desired,
+		}
 	}
 }
 
@@ -424,11 +536,25 @@ func (e *Evaluator) readPeriodSeconds(subID string) int {
 func (e *Evaluator) armPeriodic(subID string, s subscriptionRef, periodSeconds int) func() {
 	period := time.Duration(periodSeconds) * time.Second
 	cpeKey := e.CPEID + ":usp-periodic:" + subID
-	var cancel func()
+
+	// stopped: lifecycle gate — once flipped, neither armNext nor the
+	// tick fn proceed. Closes the cancel-after-tick race where a
+	// concurrent re-arm could otherwise leak a pending timer.
+	// current: atomic holder of the latest scheduler-cancel func.
+	// Read by the outer cancel; written by armNext on every re-arm.
+	var stopped atomic.Bool
+	var current atomic.Pointer[func()]
+
 	var armNext func()
 	armNext = func() {
+		if stopped.Load() {
+			return
+		}
 		jitter := time.Duration(float64(period) * (0.9 + 0.2*e.RNG.Float64()))
-		cancel = e.Scheduler.ScheduleOnce(cpeKey, jitter, func(_ context.Context) error {
+		c := e.Scheduler.ScheduleOnce(cpeKey, jitter, func(_ context.Context) error {
+			if stopped.Load() {
+				return nil
+			}
 			for _, p := range s.ReferenceList {
 				raw := e.readLeaf(p)
 				b := &notify.ValueChangeBuilder{SubscriptionID: subID}
@@ -442,11 +568,14 @@ func (e *Evaluator) armPeriodic(subID string, s subscriptionRef, periodSeconds i
 			armNext()
 			return nil
 		})
+		current.Store(&c)
 	}
 	armNext()
+
 	return func() {
-		if cancel != nil {
-			cancel()
+		stopped.Store(true)
+		if p := current.Load(); p != nil && *p != nil {
+			(*p)()
 		}
 	}
 }

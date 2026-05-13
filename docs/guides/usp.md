@@ -125,7 +125,25 @@ Each enabled Subscription drives a per-NotifType trigger:
 
 Subscription matching is exact-path for `Event` / `ValueChange` and prefix for `ObjectCreation` / `ObjectDeletion`. The evaluator debounces table-write rescans by 50ms so a controller doing multi-row provisioning sees its writes settle before triggers register.
 
-`OperationComplete` Subscriptions and cross-restart Subscription persistence are out of scope for now.
+### Runtime reconciliation
+
+The Subscription table is fully mutable at runtime. When the controller drives `Add`, `Set`, or `Delete` against `Device.LocalAgent.Subscription.{i}.`, the evaluator's `Tree.OnWrite` hook fires, a debounced rescan (50ms) reads the live table, and the trigger indices rebuild. Specifically:
+
+- **`Add`** materializes a new row; once `Enable=true` is set on the row (whether in the same Add via `param_settings` or via a follow-up `Set`), the evaluator picks it up and the row starts firing its `NotifType` triggers.
+- **`Set Enable=false`** on an existing row removes it from the trigger indices; no further Notifies fire for that row until `Enable` flips back to `true`.
+- **`Set NotifType=…`** on an existing row reconfigures it. Switching from `Periodic` to a non-Periodic type cancels the periodic timer; switching to `Periodic` arms one at the row's current `Period`.
+- **`Set Period=…`** on an existing Periodic row re-arms the timer at the new cadence. Setting the same `Period` back is a no-op (idempotent).
+- **`Delete`** on a row removes it cleanly; if the row was Periodic, its timer cancels and no further ticks fire.
+
+Malformed rows are logged at warn level and skipped — the controller still sees the `Set` / `Add` succeed on the wire, but the row does not register:
+
+- `NotifType` non-empty and non-`Periodic` with an empty `ReferenceList` → "row skipped: empty ReferenceList".
+- `NotifType=Periodic` with an empty `ID` → "Periodic skipped: empty ID".
+- `NotifType=Periodic` with `Period=0` or unparseable `Period` → "Periodic skipped: invalid Period".
+
+`NotifType=Periodic` with an empty `ReferenceList` is legitimate (the interval alone drives the cadence) and is not flagged.
+
+`Persistent: true` is honored across in-profile re-seeds, but explicit cross-`Reboot` persistence (carrying a runtime-added Subscription through a simulated factory reset) is not currently modeled. `OperationComplete` Subscriptions are also out of scope; their async-Operate plumbing is a future epic.
 
 ## Architectural fit
 
