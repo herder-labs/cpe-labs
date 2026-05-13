@@ -55,7 +55,7 @@ USP-enabled profiles install a system leaf `Internal.Reboot.Cause` with initial 
 
 Process restart resets the leaf back to `LocalFactoryReset` because `LoadProfile` rebuilds the tree from scratch (v0 process-restart-as-factory-reset semantics; cross-restart NVRAM persistence is deferred).
 
-### Running against a herder-labs / OpenACS dev stack
+### Running against a Herder dev stack
 
 If the controller's dev stack is running locally with the NATS-MQTT bridge enabled, cpe-labs joins the broker network and registers as the device-side simulator that obuspa would otherwise play in the reference fixture:
 

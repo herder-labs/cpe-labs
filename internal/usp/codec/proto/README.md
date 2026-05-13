@@ -4,7 +4,7 @@ Vendored Broadband Forum TR-369 USP protobuf schemas. These are the wire-contrac
 
 ## Source
 
-Copied verbatim from herder-labs/herder (formerly ispx-ltd/OpenACS) at commit `e2f5e0388fdabf86c5a92647d7b48859bf396cbb`, path `backend/internal/usp/codec/proto/`.
+Copied verbatim from herder-labs/herder at commit `e2f5e0388fdabf86c5a92647d7b48859bf396cbb`, path `backend/internal/usp/codec/proto/`.
 
 Vendoring tracks the controller's version of the schema, not BBF upstream directly, so wire-compat lockstep with the reference controller is preserved if BBF revises the spec.
 
