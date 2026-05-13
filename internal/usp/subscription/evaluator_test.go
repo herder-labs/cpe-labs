@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/herder-labs/cpe-labs/internal/cwmp/scheduler"
 	"github.com/herder-labs/cpe-labs/internal/paramtree"
 	"github.com/herder-labs/cpe-labs/internal/usp/codec"
 	uspproto "github.com/herder-labs/cpe-labs/internal/usp/codec/proto"
@@ -144,6 +145,128 @@ func TestEvaluatorObjectDeletionFiresWhenSubscriptionInstalled(t *testing.T) {
 	od := msg.GetBody().GetRequest().GetNotify().GetObjDeletion()
 	if od == nil {
 		t.Fatalf("expected ObjectDeletion Notify")
+	}
+}
+
+// newPeriodicTestEvaluator returns an evaluator wired to a real
+// scheduler.Scheduler so Periodic tests exercise the real
+// cancel-and-rearm path. The scheduler is Start()ed and Stop()ped
+// via t.Cleanup.
+func newPeriodicTestEvaluator(t *testing.T, tree *paramtree.Tree, adapter *fakeAdapter) *subscription.Evaluator {
+	t.Helper()
+	sched := scheduler.NewScheduler(scheduler.Options{Logger: silentLogger()})
+	if err := sched.Start(context.Background()); err != nil {
+		t.Fatalf("scheduler.Start: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = sched.Stop(ctx)
+	})
+	return subscription.New(tree, adapter, "os::A", "self::openacs", sched, "cpe-1", nil, silentLogger())
+}
+
+func TestEvaluatorRuntimeDeletePeriodicCancelsTimer(t *testing.T) {
+	tree := loadEvaluatorTree(t)
+	adapter := newFakeAdapter()
+	e := newPeriodicTestEvaluator(t, tree, adapter)
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	// Promote row 1 to Periodic with a 60s period (real time; we are
+	// not waiting for a tick here, just asserting cancel semantics).
+	setSubField(t, tree, 1, "NotifType", "Periodic")
+	setSubField(t, tree, 1, "ReferenceList", "Device.WiFi.Radio.1.Channel")
+	setSubField(t, tree, 1, "Period", "60")
+	awaitRescan()
+
+	armed := e.PeriodicArmedPeriods()
+	if armed["default-boot-event-ACS"] != 60 {
+		t.Fatalf("expected default-boot-event-ACS armed at 60s, got %+v", armed)
+	}
+
+	// Delete row 1. The OnWrite hook should trigger rescan; the
+	// rescan should observe the row gone and cancel the timer.
+	if err := tree.DeleteObject("Device.LocalAgent.Subscription.1"); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+	awaitRescan()
+
+	if got := e.PeriodicArmedPeriods(); len(got) != 0 {
+		t.Errorf("expected no armed periodics after Delete, got %+v", got)
+	}
+}
+
+func TestEvaluatorRuntimePeriodChange(t *testing.T) {
+	tree := loadEvaluatorTree(t)
+	adapter := newFakeAdapter()
+	e := newPeriodicTestEvaluator(t, tree, adapter)
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	setSubField(t, tree, 1, "NotifType", "Periodic")
+	setSubField(t, tree, 1, "ReferenceList", "Device.WiFi.Radio.1.Channel")
+	setSubField(t, tree, 1, "Period", "60")
+	awaitRescan()
+	if got := e.PeriodicArmedPeriods()["default-boot-event-ACS"]; got != 60 {
+		t.Fatalf("initial period got %d, want 60", got)
+	}
+
+	// Change Period; rescan must cancel old timer and re-arm at new period.
+	setSubField(t, tree, 1, "Period", "5")
+	awaitRescan()
+	if got := e.PeriodicArmedPeriods()["default-boot-event-ACS"]; got != 5 {
+		t.Errorf("after Period change got %d, want 5", got)
+	}
+
+	// Idempotent: setting the same Period again must NOT re-arm.
+	beforeRebuild := e.RebuildCount()
+	setSubField(t, tree, 1, "Period", "5")
+	awaitRescan()
+	afterRebuild := e.RebuildCount()
+	if afterRebuild <= beforeRebuild {
+		t.Errorf("expected at least one rebuild from the write, got delta %d", afterRebuild-beforeRebuild)
+	}
+	if got := e.PeriodicArmedPeriods()["default-boot-event-ACS"]; got != 5 {
+		t.Errorf("after idempotent re-set got %d, want 5", got)
+	}
+}
+
+func TestEvaluatorRuntimeNotifTypeChange(t *testing.T) {
+	tree := loadEvaluatorTree(t)
+	adapter := newFakeAdapter()
+	e := newPeriodicTestEvaluator(t, tree, adapter)
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	setSubField(t, tree, 1, "NotifType", "Periodic")
+	setSubField(t, tree, 1, "ReferenceList", "Device.WiFi.Radio.1.Channel")
+	setSubField(t, tree, 1, "Period", "60")
+	awaitRescan()
+	if got := e.PeriodicArmedPeriods()["default-boot-event-ACS"]; got != 60 {
+		t.Fatalf("expected periodic armed, got %+v", e.PeriodicArmedPeriods())
+	}
+
+	// Flip to ValueChange. Periodic timer must cancel; ValueChange
+	// index must include the row.
+	setSubField(t, tree, 1, "NotifType", "ValueChange")
+	awaitRescan()
+
+	if got := e.PeriodicArmedPeriods(); len(got) != 0 {
+		t.Errorf("expected no armed periodics after NotifType change, got %+v", got)
+	}
+
+	// Now a ValueChange on the watched leaf should emit a Notify.
+	e.NotifyValueChange("Device.WiFi.Radio.1.Channel", "11")
+	msg := adapter.awaitSend(t, 200*time.Millisecond)
+	if msg.GetBody().GetRequest().GetNotify().GetValueChange() == nil {
+		t.Errorf("expected ValueChange Notify after NotifType flip")
 	}
 }
 

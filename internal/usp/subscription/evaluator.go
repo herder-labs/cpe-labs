@@ -49,7 +49,7 @@ type Evaluator struct {
 	objectCreation  map[string][]subscriptionRef
 	objectDeletion  map[string][]subscriptionRef
 	eventIdx        map[string][]subscriptionRef
-	periodicCancels map[string]func()
+	periodicCancels map[string]*periodicEntry
 	started         bool
 
 	rescanCh chan struct{}
@@ -74,6 +74,14 @@ type subscriptionRef struct {
 	Recipient     string
 }
 
+// periodicEntry tracks an armed Periodic subscription. period is the
+// seconds value the timer was armed with so reschedulePeriodic can
+// detect a Period-leaf change and re-arm.
+type periodicEntry struct {
+	cancel func()
+	period int
+}
+
 // New returns an evaluator ready to Start.
 func New(tree *paramtree.Tree, adapter mtp.Adapter, agentEID, controllerEID string, sched *scheduler.Scheduler, cpeID string, rng *rand.Rand, logger *slog.Logger) *Evaluator {
 	if logger == nil {
@@ -95,7 +103,7 @@ func New(tree *paramtree.Tree, adapter mtp.Adapter, agentEID, controllerEID stri
 		objectCreation:  map[string][]subscriptionRef{},
 		objectDeletion:  map[string][]subscriptionRef{},
 		eventIdx:        map[string][]subscriptionRef{},
-		periodicCancels: map[string]func(){},
+		periodicCancels: map[string]*periodicEntry{},
 		rescanCh:        make(chan struct{}, 1),
 	}
 }
@@ -127,6 +135,22 @@ func (e *Evaluator) Start(ctx context.Context) error {
 // activity; not part of the wire-level contract.
 func (e *Evaluator) RebuildCount() int64 { return e.rebuildCount.Load() }
 
+// PeriodicArmedPeriods returns a snapshot of {Subscription.ID -> period
+// in seconds} for every currently-armed Periodic timer. Test affordance
+// for asserting that reschedulePeriodic re-armed (or cancelled) the
+// right entries; not part of the wire-level contract.
+func (e *Evaluator) PeriodicArmedPeriods() map[string]int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make(map[string]int, len(e.periodicCancels))
+	for id, entry := range e.periodicCancels {
+		if entry != nil {
+			out[id] = entry.period
+		}
+	}
+	return out
+}
+
 // registerTreeHookOnce installs the Tree.OnWrite filter. The callback
 // body checks e.enabled before queueing a rescan, so Stop/Start cycles
 // flip the gate without leaking extra registrations.
@@ -152,12 +176,12 @@ func (e *Evaluator) Stop(_ context.Context) error {
 	e.enabled.Store(false)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for _, cancel := range e.periodicCancels {
-		if cancel != nil {
-			cancel()
+	for _, entry := range e.periodicCancels {
+		if entry != nil && entry.cancel != nil {
+			entry.cancel()
 		}
 	}
-	e.periodicCancels = map[string]func(){}
+	e.periodicCancels = map[string]*periodicEntry{}
 	e.started = false
 	return nil
 }
@@ -427,34 +451,57 @@ func (e *Evaluator) reschedulePeriodic(subs []subscriptionRef) {
 
 	wanted := map[string]subscriptionRef{}
 	for _, s := range subs {
-		if s.NotifType == NotifPeriodic && s.ID != "" {
-			wanted[s.ID] = s
+		if s.NotifType != NotifPeriodic {
+			continue
 		}
+		if s.ID == "" {
+			e.Logger.Warn("usp Subscription Periodic skipped: empty ID")
+			continue
+		}
+		wanted[s.ID] = s
 	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	// Cancel periodic schedules that are no longer wanted.
-	for id, cancel := range e.periodicCancels {
+	for id, entry := range e.periodicCancels {
 		if _, keep := wanted[id]; !keep {
-			if cancel != nil {
-				cancel()
+			if entry != nil && entry.cancel != nil {
+				entry.cancel()
 			}
 			delete(e.periodicCancels, id)
 		}
 	}
 
-	// Arm new periodic schedules.
+	// Arm or re-arm periodic schedules. An existing entry whose
+	// Period changed must be cancelled and re-armed; one whose
+	// Period is unchanged is left alone.
 	for id, s := range wanted {
-		if _, exists := e.periodicCancels[id]; exists {
+		desired := e.readPeriodSeconds(id)
+		if desired <= 0 {
+			if existing, ok := e.periodicCancels[id]; ok {
+				if existing != nil && existing.cancel != nil {
+					existing.cancel()
+				}
+				delete(e.periodicCancels, id)
+			}
+			e.Logger.Warn("usp Subscription Periodic skipped: invalid Period",
+				"sub_id", id)
 			continue
 		}
-		period := e.readPeriodSeconds(id)
-		if period <= 0 {
-			continue
+		if existing, ok := e.periodicCancels[id]; ok && existing != nil {
+			if existing.period == desired {
+				continue
+			}
+			if existing.cancel != nil {
+				existing.cancel()
+			}
 		}
-		e.periodicCancels[id] = e.armPeriodic(id, s, period)
+		e.periodicCancels[id] = &periodicEntry{
+			cancel: e.armPeriodic(id, s, desired),
+			period: desired,
+		}
 	}
 }
 
@@ -484,11 +531,25 @@ func (e *Evaluator) readPeriodSeconds(subID string) int {
 func (e *Evaluator) armPeriodic(subID string, s subscriptionRef, periodSeconds int) func() {
 	period := time.Duration(periodSeconds) * time.Second
 	cpeKey := e.CPEID + ":usp-periodic:" + subID
-	var cancel func()
+
+	// stopped: lifecycle gate — once flipped, neither armNext nor the
+	// tick fn proceed. Closes the cancel-after-tick race where a
+	// concurrent re-arm could otherwise leak a pending timer.
+	// current: atomic holder of the latest scheduler-cancel func.
+	// Read by the outer cancel; written by armNext on every re-arm.
+	var stopped atomic.Bool
+	var current atomic.Pointer[func()]
+
 	var armNext func()
 	armNext = func() {
+		if stopped.Load() {
+			return
+		}
 		jitter := time.Duration(float64(period) * (0.9 + 0.2*e.RNG.Float64()))
-		cancel = e.Scheduler.ScheduleOnce(cpeKey, jitter, func(_ context.Context) error {
+		c := e.Scheduler.ScheduleOnce(cpeKey, jitter, func(_ context.Context) error {
+			if stopped.Load() {
+				return nil
+			}
 			for _, p := range s.ReferenceList {
 				raw := e.readLeaf(p)
 				b := &notify.ValueChangeBuilder{SubscriptionID: subID}
@@ -502,11 +563,14 @@ func (e *Evaluator) armPeriodic(subID string, s subscriptionRef, periodSeconds i
 			armNext()
 			return nil
 		})
+		current.Store(&c)
 	}
 	armNext()
+
 	return func() {
-		if cancel != nil {
-			cancel()
+		stopped.Store(true)
+		if p := current.Load(); p != nil && *p != nil {
+			(*p)()
 		}
 	}
 }
