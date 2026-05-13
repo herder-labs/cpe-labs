@@ -152,6 +152,150 @@ func TestEvaluatorObjectDeletionFiresWhenSubscriptionInstalled(t *testing.T) {
 // scheduler.Scheduler so Periodic tests exercise the real
 // cancel-and-rearm path. The scheduler is Start()ed and Stop()ped
 // via t.Cleanup.
+func TestEvaluatorRuntimeAddOnSubscriptionTable(t *testing.T) {
+	tree := loadEvaluatorTree(t)
+	adapter := newFakeAdapter()
+	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	// Add a new Subscription row at runtime (controller-driven Add).
+	inst, err := tree.AddObject("Device.LocalAgent.Subscription")
+	if err != nil {
+		t.Fatalf("AddObject: %v", err)
+	}
+	// Populate it before the rescan window closes.
+	setSubField(t, tree, inst, "Enable", "true")
+	setSubField(t, tree, inst, "ID", "runtime-sub-vc")
+	setSubField(t, tree, inst, "NotifType", "ValueChange")
+	setSubField(t, tree, inst, "ReferenceList", "Device.WiFi.Radio.1.Channel")
+	awaitRescan()
+
+	// The new row should now be active. A ValueChange on the watched
+	// leaf must fire a Notify with the new SubscriptionID.
+	e.NotifyValueChange("Device.WiFi.Radio.1.Channel", "11")
+	msg := adapter.awaitSend(t, 200*time.Millisecond)
+	if got := msg.GetBody().GetRequest().GetNotify().GetSubscriptionId(); got != "runtime-sub-vc" {
+		t.Errorf("SubscriptionId = %q, want runtime-sub-vc", got)
+	}
+}
+
+func TestEvaluatorRuntimeSetDisablesRow(t *testing.T) {
+	tree := loadEvaluatorTree(t)
+	adapter := newFakeAdapter()
+	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	// Reconfigure row 1 to ValueChange + watch a known leaf.
+	setSubField(t, tree, 1, "NotifType", "ValueChange")
+	setSubField(t, tree, 1, "ReferenceList", "Device.WiFi.Radio.1.Channel")
+	awaitRescan()
+
+	// Confirm baseline: Notify fires.
+	e.NotifyValueChange("Device.WiFi.Radio.1.Channel", "11")
+	_ = adapter.awaitSend(t, 200*time.Millisecond)
+	baselineCount := len(adapter.snapshot())
+
+	// Disable the row.
+	setSubField(t, tree, 1, "Enable", "false")
+	awaitRescan()
+
+	// Notify must not emit anything new.
+	e.NotifyValueChange("Device.WiFi.Radio.1.Channel", "12")
+	time.Sleep(80 * time.Millisecond)
+	if got := len(adapter.snapshot()); got != baselineCount {
+		t.Errorf("got %d notifies after disable, want %d (no new emits)", got, baselineCount)
+	}
+}
+
+func TestEvaluatorRuntimeEnableToggle(t *testing.T) {
+	tree := loadEvaluatorTree(t)
+	adapter := newFakeAdapter()
+	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	setSubField(t, tree, 1, "NotifType", "ValueChange")
+	setSubField(t, tree, 1, "ReferenceList", "Device.WiFi.Radio.1.Channel")
+	awaitRescan()
+
+	for i, want := range []struct {
+		enable string
+		emits  bool
+	}{
+		{"true", true},
+		{"false", false},
+		{"true", true},
+		{"false", false},
+	} {
+		setSubField(t, tree, 1, "Enable", want.enable)
+		awaitRescan()
+
+		before := len(adapter.snapshot())
+		e.NotifyValueChange("Device.WiFi.Radio.1.Channel", "11")
+		time.Sleep(80 * time.Millisecond)
+		after := len(adapter.snapshot())
+
+		if want.emits {
+			if after <= before {
+				t.Errorf("toggle %d (enable=%s): expected emit, got %d → %d", i, want.enable, before, after)
+			}
+		} else {
+			if after != before {
+				t.Errorf("toggle %d (enable=%s): expected no emit, got %d → %d", i, want.enable, before, after)
+			}
+		}
+	}
+}
+
+func TestEvaluatorRuntimeDeleteRow(t *testing.T) {
+	tree := loadEvaluatorTree(t)
+	adapter := newFakeAdapter()
+	e := subscription.New(tree, adapter, "os::A", "self::openacs", nil, "cpe-1", nil, silentLogger())
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	// Add a runtime ValueChange row, confirm it works, then Delete.
+	inst, err := tree.AddObject("Device.LocalAgent.Subscription")
+	if err != nil {
+		t.Fatalf("AddObject: %v", err)
+	}
+	setSubField(t, tree, inst, "Enable", "true")
+	setSubField(t, tree, inst, "ID", "to-delete")
+	setSubField(t, tree, inst, "NotifType", "ValueChange")
+	setSubField(t, tree, inst, "ReferenceList", "Device.WiFi.Radio.1.Channel")
+	awaitRescan()
+
+	e.NotifyValueChange("Device.WiFi.Radio.1.Channel", "11")
+	_ = adapter.awaitSend(t, 200*time.Millisecond)
+	baseline := len(adapter.snapshot())
+
+	// Delete the row.
+	if derr := tree.DeleteObject("Device.LocalAgent.Subscription." + itoa(inst)); derr != nil {
+		t.Fatalf("DeleteObject: %v", derr)
+	}
+	awaitRescan()
+
+	e.NotifyValueChange("Device.WiFi.Radio.1.Channel", "12")
+	time.Sleep(80 * time.Millisecond)
+	if got := len(adapter.snapshot()); got != baseline {
+		t.Errorf("got %d notifies after Delete, want %d (no new emits)", got, baseline)
+	}
+}
+
+// newPeriodicTestEvaluator returns an evaluator wired to a real
+// scheduler.Scheduler so Periodic tests exercise the real
+// cancel-and-rearm path. The scheduler is Start()ed and Stop()ped
+// via t.Cleanup.
 func newPeriodicTestEvaluator(t *testing.T, tree *paramtree.Tree, adapter *fakeAdapter) *subscription.Evaluator {
 	t.Helper()
 	sched := scheduler.NewScheduler(scheduler.Options{Logger: silentLogger()})
