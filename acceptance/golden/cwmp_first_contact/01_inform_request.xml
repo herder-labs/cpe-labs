@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:cwmp="urn:dslforum-org:cwmp-1-1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <soapenv:Header>
+    <cwmp:ID soapenv:mustUnderstand="1">{ID}</cwmp:ID>
+  </soapenv:Header>
+  <soapenv:Body>
+    <cwmp:Inform>
+      <DeviceId>
+        <Manufacturer>AcceptanceVendor</Manufacturer>
+        <OUI>AABBCC</OUI>
+        <ProductClass>AcceptanceModel</ProductClass>
+        <SerialNumber>ACCEPTANCE-0001</SerialNumber>
+      </DeviceId>
+      <Event>
+        <EventStruct>
+          <EventCode>1 BOOT</EventCode>
+          <CommandKey></CommandKey>
+        </EventStruct>
+        <EventStruct>
+          <EventCode>0 BOOTSTRAP</EventCode>
+          <CommandKey></CommandKey>
+        </EventStruct>
+      </Event>
+      <MaxEnvelopes>1</MaxEnvelopes>
+      <CurrentTime>{TIMESTAMP}</CurrentTime>
+      <RetryCount>0</RetryCount>
+      <ParameterList>
+        <ParameterValueStruct>
+          <Name>Device.DeviceInfo.Manufacturer</Name>
+          <Value xsi:type="xsd:string">AcceptanceVendor</Value>
+        </ParameterValueStruct>
+        <ParameterValueStruct>
+          <Name>Device.DeviceInfo.ManufacturerOUI</Name>
+          <Value xsi:type="xsd:string">AABBCC</Value>
+        </ParameterValueStruct>
+        <ParameterValueStruct>
+          <Name>Device.DeviceInfo.ProductClass</Name>
+          <Value xsi:type="xsd:string">AcceptanceModel</Value>
+        </ParameterValueStruct>
+        <ParameterValueStruct>
+          <Name>Device.DeviceInfo.SerialNumber</Name>
+          <Value xsi:type="xsd:string">ACCEPTANCE-0001</Value>
+        </ParameterValueStruct>
+        <ParameterValueStruct>
+          <Name>Device.DeviceInfo.SoftwareVersion</Name>
+          <Value xsi:type="xsd:string">1.0.0</Value>
+        </ParameterValueStruct>
+        <ParameterValueStruct>
+          <Name>Device.DeviceInfo.HardwareVersion</Name>
+          <Value xsi:type="xsd:string">rev-A</Value>
+        </ParameterValueStruct>
+      </ParameterList>
+
+    </cwmp:Inform>
+  </soapenv:Body>
+</soapenv:Envelope>
