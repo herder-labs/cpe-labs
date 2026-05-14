@@ -70,9 +70,10 @@ What `NormalizeCWMP` replaces:
 - `<CurrentTime>...</CurrentTime>` → `<CurrentTime>{TIMESTAMP}</CurrentTime>`
 - `<ConnectionRequestURL>...</...>` → `<ConnectionRequestURL>{CR_URL}</...>`
 
-What `NormalizeUSPRecord` replaces (when USP scenarios land):
+What `NormalizeUSPRecord` replaces:
 
 - `Header.msg_id` → `{MSG_ID}`
+- `Record.no_session_context.payload` → cleared (it's the raw proto-encoded Msg bytes; renders separately as decoded Msg below, so keeping both is redundant AND the bytes carry a non-deterministic encoded `msg_id`)
 
 Everything else is preserved verbatim. If a future change drifts those preserved fields, the matching golden goes red — exactly what we want.
 
@@ -80,10 +81,14 @@ Everything else is preserved verbatim. If a future change drifts those preserved
 
 1. Create `acceptance/scenarios/<name>_test.go` with `//go:build acceptance` at the top.
 2. Pick a fixture helper:
-   - `harness.StartCWMPAcceptance(t)` for CWMP-only flows
-   - For USP flows: bring up `harness.StartBroker(t)`, write a profile that points `usp.broker.address` at the broker host:port, drive cpe-sim, subscribe to `usp/v1/controller` from the test and stuff payloads into the `WireCapture`.
-3. Launch the simulator: `harness.LaunchSim(t, fix, timeout, "--seed=1", ...)`.
+   - `harness.StartCWMPAcceptance(t)` for CWMP-only one-shot flows
+   - `harness.StartUSPAcceptance(t, harness.USPOptions{FirstContact: ...})` for USP flows. The fixture brings up an embedded broker, subscribes a paho client to `usp/v1/controller/#`, materializes a USP-enabled profile pointed at the broker, and returns `BrokerHost/BrokerPort/AgentEID` so scenarios that publish back to the agent (#18, #19) can spin up their own paho client.
+3. Launch the simulator:
+   - `harness.LaunchSim(t, fix, timeout, "--seed=1", ...)` for one-shot CWMP (blocks until cpe-sim exits)
+   - `harness.LaunchSimDaemon(t, fix, "--seed=1", ...)` for daemon-mode (USP and any CWMP flow that needs cpe-sim alive while the test drives it). Returns a `*SimProcess` that auto-stops at test cleanup; SIGTERM the process via `proc.Stop(t)` if you need to wait for clean exit mid-test.
 4. Capture bytes; normalize via the helper that matches the protocol.
+   - CWMP: read `snapshot := fix.Capture.Snapshot()` after the simulator exits; `harness.NormalizeCWMP(snapshot.CWMPRequests[0])`.
+   - USP: `payload := fix.Capture.WaitForUSPMessage(t, 5*time.Second)` returns the next unread payload; call repeatedly to drain a sequence. Then `harness.NormalizeUSPRecord(payload)`.
 5. `CompareGolden(t, "<scenario>/<step>.<ext>", normalized)`.
 6. Run `make acceptance-update` once to write the initial golden.
 7. **Read the generated golden carefully.** A golden you didn't inspect is a golden you don't trust.

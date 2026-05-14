@@ -1,0 +1,19 @@
+# Minimal USP acceptance profile (factory-reset variant).
+#
+# DeviceInfo + USP block, nothing else. Profile loader pre-installs
+# Internal.Reboot.Cause=LocalFactoryReset because the leaf is not
+# declared in parameters; cpe-sim's first contact will therefore
+# emit Notify(OnBoardRequest).
+#
+# Broker address/port are placeholders the acceptance harness
+# substitutes at fixture time (__BROKER_ADDR__, __BROKER_PORT__).
+
+deviceIdPaths:
+  manufacturer: Device.DeviceInfo.Manufacturer
+  oui:          Device.DeviceInfo.ManufacturerOUI
+  productClass: Device.DeviceInfo.ProductClass
+  serialNumber: Device.DeviceInfo.SerialNumber
+
+fleet:
+  count: 1
+  serialPattern: "{base}"

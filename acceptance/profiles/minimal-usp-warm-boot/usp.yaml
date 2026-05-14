@@ -1,0 +1,18 @@
+usp:
+  enable: true
+
+  endpointID:
+    scheme: os
+    ouiPath: Device.DeviceInfo.ManufacturerOUI
+    serialPath: Device.DeviceInfo.SerialNumber
+
+  controllerEndpointID: "self::herder"
+
+  broker:
+    address: __BROKER_ADDR__
+    port: __BROKER_PORT__
+    protocolVersion: "3.1.1"
+    keepAliveSeconds: 60
+    cleanSession: true
+
+  dataModels: [device]

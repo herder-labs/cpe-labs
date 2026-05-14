@@ -53,13 +53,21 @@ var (
 // preserved (those are the wire contract). The embedded Msg is fully
 // re-rendered after Header.MsgId substitution.
 //
-// USP scenarios are deferred to follow-up sub-issues; the helper is
-// included here so they have a stable seam to plug into.
+// The Record's no_session_context.payload field carries the raw
+// proto-encoded Msg bytes — which include the non-deterministic
+// msg_id inside the wire format. We clear that field before rendering
+// the Record because (a) it's non-deterministic across runs and
+// (b) the same data appears decoded in the rendered Msg below.
 func NormalizeUSPRecord(payload []byte) ([]byte, error) {
 	record, msg, err := codec.UnwrapRecord(payload)
 	if err != nil {
 		return nil, err
 	}
+	recordClone := proto.Clone(record).(*uspproto.Record)
+	if nsc := recordClone.GetNoSessionContext(); nsc != nil {
+		nsc.Payload = nil
+	}
+
 	msgClone := proto.Clone(msg).(*uspproto.Msg)
 	if msgClone.GetHeader() != nil {
 		msgClone.Header.MsgId = "{MSG_ID}"
@@ -67,7 +75,7 @@ func NormalizeUSPRecord(payload []byte) ([]byte, error) {
 
 	textOpts := prototext.MarshalOptions{Multiline: true, Indent: "  "}
 
-	recordText, err := textOpts.Marshal(record)
+	recordText, err := textOpts.Marshal(recordClone)
 	if err != nil {
 		return nil, err
 	}
