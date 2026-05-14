@@ -1,0 +1,9 @@
+parameters:
+  - path: Device.ManagementServer.PeriodicInformInterval
+    type: xsd:unsignedInt
+    value: "1"
+    writable: true
+  - path: Device.ManagementServer.PeriodicInformEnable
+    type: xsd:boolean
+    value: "true"
+    writable: true
