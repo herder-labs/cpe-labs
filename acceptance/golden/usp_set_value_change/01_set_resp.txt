@@ -1,0 +1,31 @@
+# Record
+version:  "1.5"
+to_id:  "self::herder"
+from_id:  "os::AABBCCACCEPTANCE-0001"
+no_session_context:  {}
+
+# Msg
+header:  {
+  msg_id:  "{MSG_ID}"
+  msg_type:  SET_RESP
+}
+body:  {
+  response:  {
+    set_resp:  {
+      updated_obj_results:  {
+        requested_path:  "Device.WiFi.Radio.1."
+        oper_status:  {
+          oper_success:  {
+            updated_inst_results:  {
+              affected_path:  "Device.WiFi.Radio.1."
+              updated_params:  {
+                key:  "Channel"
+                value:  "11"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

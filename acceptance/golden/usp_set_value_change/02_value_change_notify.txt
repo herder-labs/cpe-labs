@@ -12,11 +12,10 @@ header:  {
 body:  {
   request:  {
     notify:  {
-      on_board_req:  {
-        oui:  "AABBCC"
-        product_class:  "AcceptanceModel"
-        serial_number:  "ACCEPTANCE-0001"
-        agent_supported_protocol_versions:  "1.5"
+      subscription_id:  "vc-sub-1"
+      value_change:  {
+        param_path:  "Device.WiFi.Radio.1.Channel"
+        param_value:  "11"
       }
     }
   }
