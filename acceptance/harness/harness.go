@@ -173,3 +173,12 @@ func acceptanceProfileDir(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(repoRoot(), "acceptance", "profiles", "minimal-tr181")
 }
+
+// AcceptanceProfilePath returns the absolute path to
+// acceptance/profiles/<name>/. Use this when a scenario needs a
+// non-default profile (e.g. one with periodicInformPaths, CR
+// listener, generators, ...). The path is resolved from repoRoot()
+// so it works regardless of where `go test` was invoked.
+func AcceptanceProfilePath(name string) string {
+	return filepath.Join(repoRoot(), "acceptance", "profiles", name)
+}

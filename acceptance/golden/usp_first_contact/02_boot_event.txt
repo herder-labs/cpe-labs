@@ -1,21 +1,21 @@
 # Record
-version:  "1.5"
-to_id:  "self::herder"
-from_id:  "os::AABBCCACCEPTANCE-0001"
-no_session_context:  {}
+version: "1.5"
+to_id: "self::herder"
+from_id: "os::AABBCCACCEPTANCE-0001"
+no_session_context: {}
 
 # Msg
-header:  {
-  msg_id:  "{MSG_ID}"
-  msg_type:  NOTIFY
+header: {
+  msg_id: "{MSG_ID}"
+  msg_type: NOTIFY
 }
-body:  {
-  request:  {
-    notify:  {
-      subscription_id:  "default-boot-event-ACS"
-      event:  {
-        obj_path:  "Device."
-        event_name:  "Boot!"
+body: {
+  request: {
+    notify: {
+      subscription_id: "default-boot-event-ACS"
+      event: {
+        obj_path: "Device."
+        event_name: "Boot!"
       }
     }
   }
