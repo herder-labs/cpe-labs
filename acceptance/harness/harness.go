@@ -43,9 +43,14 @@ type Fixture struct {
 	BinPath     string // absolute path to the cpe-sim binary
 
 	// USP-only fields. Zero values for CWMP-only fixtures.
-	BrokerHost string
-	BrokerPort int
-	AgentEID   string
+	BrokerHost    string
+	BrokerPort    int
+	AgentEID      string
+	ControllerEID string // defaults to "self::herder" matching the acceptance profiles
+
+	// Lazy USP publisher; set up on first PublishUSP call. Internal.
+	pubMu     sync.Mutex
+	pubClient pahoClient
 }
 
 // StartCWMPAcceptance brings up a mock CWMP ACS that returns

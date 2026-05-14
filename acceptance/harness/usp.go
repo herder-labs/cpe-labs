@@ -87,13 +87,14 @@ func StartUSPAcceptance(t *testing.T, opts USPOptions) *Fixture {
 	agentEID := identity.EID("AABBCC", "ACCEPTANCE-0001")
 
 	return &Fixture{
-		ACS:         acs,
-		Capture:     cap,
-		ProfilePath: profileDir,
-		BinPath:     SimBinary(t),
-		BrokerHost:  host,
-		BrokerPort:  port,
-		AgentEID:    agentEID,
+		ACS:           acs,
+		Capture:       cap,
+		ProfilePath:   profileDir,
+		BinPath:       SimBinary(t),
+		BrokerHost:    host,
+		BrokerPort:    port,
+		AgentEID:      agentEID,
+		ControllerEID: "self::herder",
 	}
 }
 

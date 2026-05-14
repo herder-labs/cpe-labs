@@ -7,15 +7,14 @@ no_session_context: {}
 # Msg
 header: {
   msg_id: "{MSG_ID}"
-  msg_type: NOTIFY
+  msg_type: OPERATE_RESP
 }
 body: {
-  request: {
-    notify: {
-      subscription_id: "default-boot-event-ACS"
-      event: {
-        obj_path: "Device."
-        event_name: "Boot!"
+  response: {
+    operate_resp: {
+      operation_results: {
+        executed_command: "Device.Reboot()"
+        req_output_args: {}
       }
     }
   }
