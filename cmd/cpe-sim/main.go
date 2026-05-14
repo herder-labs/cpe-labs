@@ -88,6 +88,13 @@ type cpeStack struct {
 	uspOpts       *uspsession.Options     // nil when USP disabled
 	uspEvaluator  *subscription.Evaluator // nil when USP disabled
 
+	// publishCRURL writes the CR listener's URL into the configured
+	// tree leaf once listener.Start() has bound the port. nil when CR
+	// is disabled. cmd/cpe-sim invokes this after listener.Start and
+	// before bootstrapAll so the bootstrap Inform's ParameterList
+	// carries the correct URL.
+	publishCRURL func() error
+
 	stateMu       sync.RWMutex
 	lifecycle     string
 	lastEvent     string
@@ -383,12 +390,22 @@ func run(ctx context.Context, args []string, stdout, stderr *os.File) error {
 
 	// Start the CR listener now (after all per-CPE endpoints are
 	// registered) so the listener is live before bootstrap Informs
-	// fire. The published ConnectionRequestURL was written into each
-	// tree at registration time below, so the bootstrap Inform carries
+	// fire. listener.Start binds the TCP port; only after that does
+	// listener.URL(path) return a non-empty value. Publish each CPE's
+	// ConnectionRequestURL into its tree now, between Start and
+	// bootstrapAll, so the bootstrap Inform's ParameterList carries
 	// the correct URL.
 	if listener != nil {
 		if startErr := listener.Start(); startErr != nil {
 			return fmt.Errorf("start CR listener: %w", startErr)
+		}
+		for _, st := range stacks {
+			if st.publishCRURL == nil {
+				continue
+			}
+			if pErr := st.publishCRURL(); pErr != nil {
+				return fmt.Errorf("publish CR URL for %s: %w", st.id, pErr)
+			}
 		}
 	}
 
@@ -983,10 +1000,13 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 	}
 
 	// CR listener registration (per-CPE path when count > 1).
+	var publishCRURL func() error
 	if in.listener != nil {
-		if regErr := registerCREndpoint(in.listener, cfg, prof, in.id, in.fleetCount, runOpts, sessionMu, in.logger); regErr != nil {
+		publish, regErr := registerCREndpoint(in.listener, cfg, prof, in.id, in.fleetCount, runOpts, sessionMu, in.logger)
+		if regErr != nil {
 			return nil, fmt.Errorf("register CR endpoint: %w", regErr)
 		}
+		publishCRURL = publish
 	}
 
 	var uspAdapter mtp.Adapter
@@ -1074,6 +1094,7 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 			prof.DeviceIDPaths.ProductClass,
 			prof.DeviceIDPaths.SerialNumber,
 		},
+		publishCRURL: publishCRURL,
 	}, nil
 }
 
@@ -1184,15 +1205,22 @@ func bootstrapAll(ctx context.Context, stacks []*cpeStack, bootDelay time.Durati
 // The CRPublishPath leaf in tree is validated as writable, and the
 // resolved URL is written into it via Tree.Set so the next Inform
 // reports the correct ConnectionRequestURL.
-func registerCREndpoint(listener *cr.Listener, cfg cpeconfig.Config, prof *paramtree.Profile, cpeID string, fleetCount int, runOpts *cwmp.RunSessionOptions, sessionMu *sync.Mutex, logger *slog.Logger) error {
+// registerCREndpoint wires one CPE's CR endpoint into the listener
+// and returns a publish-URL closure the caller invokes AFTER
+// listener.Start(). The two-step approach matters because
+// listener.URL(path) returns "" until Start has actually bound the
+// TCP port; calling tree.Set(URL) at registration time would write
+// an empty string into the leaf and the bootstrap Inform would
+// carry that empty value.
+func registerCREndpoint(listener *cr.Listener, cfg cpeconfig.Config, prof *paramtree.Profile, cpeID string, fleetCount int, runOpts *cwmp.RunSessionOptions, sessionMu *sync.Mutex, logger *slog.Logger) (func() error, error) {
 	tree := prof.Tree
 
 	cur, err := tree.Get(cfg.CRPublishPath)
 	if err != nil {
-		return fmt.Errorf("cr-publish-path %q not found in profile: %w", cfg.CRPublishPath, err)
+		return nil, fmt.Errorf("cr-publish-path %q not found in profile: %w", cfg.CRPublishPath, err)
 	}
 	if !cur.Writable {
-		return fmt.Errorf("cr-publish-path %q is not writable in profile", cfg.CRPublishPath)
+		return nil, fmt.Errorf("cr-publish-path %q is not writable in profile", cfg.CRPublishPath)
 	}
 
 	path := cfg.CRPath
@@ -1229,7 +1257,7 @@ func registerCREndpoint(listener *cr.Listener, cfg cpeconfig.Config, prof *param
 
 	authn, err := buildCRAuthenticator(prof.ConnectionRequest, tree)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := listener.Register(cr.Endpoint{
@@ -1238,18 +1266,24 @@ func registerCREndpoint(listener *cr.Listener, cfg cpeconfig.Config, prof *param
 		Auth:      authn,
 		Throttle:  prof.ConnectionRequest.ThrottleWindow,
 	}); err != nil {
-		return fmt.Errorf("register CR endpoint %q: %w", path, err)
+		return nil, fmt.Errorf("register CR endpoint %q: %w", path, err)
 	}
 
-	url := listener.URL(path)
-	if err := tree.Set(cfg.CRPublishPath, paramtree.Value{
-		Type: cur.Type, Raw: url, Writable: cur.Writable,
-	}); err != nil {
-		return fmt.Errorf("publish CR URL into tree at %q: %w", cfg.CRPublishPath, err)
+	publish := func() error {
+		url := listener.URL(path)
+		if url == "" {
+			return fmt.Errorf("cr listener.URL(%q) is empty; listener.Start must run before publishCRURL", path)
+		}
+		if err := tree.Set(cfg.CRPublishPath, paramtree.Value{
+			Type: cur.Type, Raw: url, Writable: cur.Writable,
+		}); err != nil {
+			return fmt.Errorf("publish CR URL into tree at %q: %w", cfg.CRPublishPath, err)
+		}
+		logger.Info("connection-request URL published",
+			"cpe_id", cpeID, "path", cfg.CRPublishPath, "url", url)
+		return nil
 	}
-	logger.Info("connection-request URL published",
-		"cpe_id", cpeID, "path", cfg.CRPublishPath, "url", url)
-	return nil
+	return publish, nil
 }
 
 // buildCRAuthenticator constructs the per-Endpoint Authenticator for
