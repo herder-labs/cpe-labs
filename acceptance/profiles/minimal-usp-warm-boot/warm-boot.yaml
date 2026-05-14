@@ -1,0 +1,8 @@
+# Pre-declares Internal.Reboot.Cause so the profile loader's
+# conditional-mount logic (internal/paramtree/profile.go:1546) skips
+# the default install. With LocalReboot, cpe-sim's emitFirstContact
+# emits Notify(Event{Boot!}) instead of OnBoardRequest.
+
+parameters:
+  - path: Internal.Reboot.Cause
+    value: "LocalReboot"

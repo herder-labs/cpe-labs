@@ -37,10 +37,15 @@ const informResponse = `<?xml version="1.0"?>
 
 // Fixture bundles the per-scenario environment the harness sets up.
 type Fixture struct {
-	ACS         *httptest.Server // mock ACS (CWMP scenarios)
+	ACS         *httptest.Server // mock ACS (CWMP scenarios; also a 204-sink for USP)
 	Capture     *WireCapture
 	ProfilePath string // absolute path to the acceptance profile dir
 	BinPath     string // absolute path to the cpe-sim binary
+
+	// USP-only fields. Zero values for CWMP-only fixtures.
+	BrokerHost string
+	BrokerPort int
+	AgentEID   string
 }
 
 // StartCWMPAcceptance brings up a mock CWMP ACS that returns
@@ -51,7 +56,7 @@ type Fixture struct {
 // call StartUSPAcceptance instead.
 func StartCWMPAcceptance(t *testing.T) *Fixture {
 	t.Helper()
-	cap := &WireCapture{}
+	cap := NewWireCapture()
 
 	acs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
