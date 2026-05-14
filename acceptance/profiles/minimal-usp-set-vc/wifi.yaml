@@ -1,0 +1,9 @@
+# A single writable leaf for the Set + ValueChange acceptance scenario.
+# The scenario installs a Subscription against this path at runtime,
+# then drives Set to trigger the autonomous Notify(ValueChange).
+
+parameters:
+  - path: Device.WiFi.Radio.1.Channel
+    type: xsd:unsignedInt
+    value: "6"
+    writable: true
