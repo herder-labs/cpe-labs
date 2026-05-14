@@ -1,0 +1,10 @@
+parameters:
+  - path: Device.ManagementServer.ConnectionRequestURL
+    value: ""
+    writable: true
+  - path: Device.ManagementServer.ConnectionRequestUsername
+    value: "cpe-cr"
+    writable: true
+  - path: Device.ManagementServer.ConnectionRequestPassword
+    value: "cpe-cr-pass"
+    writable: true

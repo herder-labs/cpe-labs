@@ -104,6 +104,30 @@ func (w *WireCapture) waitForUSPMessageTB(t TB, deadline time.Duration) []byte {
 	}
 }
 
+// WaitForCWMPRequestCount blocks until at least n non-empty CWMP
+// request bodies have been captured, or the deadline elapses.
+// Returns a snapshot at the moment the threshold was met.
+//
+// Scenarios that drive cpe-sim daemon-mode and need to wait for the
+// N-th Inform call this helper instead of inlining a polling loop.
+// On deadline, t.Fatalf with a summary of how many requests landed.
+func (w *WireCapture) WaitForCWMPRequestCount(t *testing.T, n int, deadline time.Duration) WireCaptureSnapshot {
+	t.Helper()
+	end := time.Now().Add(deadline)
+	for {
+		snap := w.Snapshot()
+		if len(snap.CWMPRequests) >= n {
+			return snap
+		}
+		if time.Now().After(end) {
+			t.Fatalf("WaitForCWMPRequestCount: timed out after %s; want >=%d, got %d",
+				deadline, n, len(snap.CWMPRequests))
+			return WireCaptureSnapshot{}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // Snapshot returns a defensive copy of every captured byte slice.
 // Safe to call while the scenario is still running; further captures
 // after Snapshot do not affect the returned slices. Does NOT advance
