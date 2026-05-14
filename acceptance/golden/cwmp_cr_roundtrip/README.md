@@ -31,17 +31,20 @@ a CPE fires in response to an ACS-initiated Connection-Request.
 - `<ParameterList>` carries only `Device.DeviceInfo.SoftwareVersion`
   per the profile's `informParameters.connectionRequest`.
 
-## Why pre-pick the CR port
+## How the URL is discovered
 
-The scenario passes a known `127.0.0.1:<port>` to cpe-sim rather than
-letting cpe-sim bind to `:0` and reading the URL out of the bootstrap
-Inform's ParameterList. cpe-sim publishes the URL to the tree at
-`registerCREndpoint` time, BEFORE `listener.Start()` actually binds
-the port — see `cmd/cpe-sim/main.go:1244` +
-`internal/cwmp/cr/listener.go::URL`. The published value is therefore
-empty regardless of bind-addr. Pre-picking is the simpler workaround
-until the publish-after-start ordering is fixed (a tiny runtime bug
-worth filing separately).
+cpe-sim runs with `--cr-bind-addr=127.0.0.1:0`; the kernel picks a
+random port at `listener.Start()` time. cpe-sim then writes the
+resolved URL into `Device.ManagementServer.ConnectionRequestURL`
+(per `--cr-publish-path`). The bootstrap Inform's `ParameterList`
+carries that leaf because the profile lists it under
+`informParameters.bootstrap`. The test reads it from the captured
+Inform body via `harness.ExtractCWMPParameter`.
+
+Earlier versions of this scenario worked around a publish-before-Start
+bug (the URL was empty in the tree); cpe-labs-context #20 fixed the
+publish ordering and this scenario now discovers the URL via the
+intended bootstrap-ParameterList path.
 
 ## How to update
 

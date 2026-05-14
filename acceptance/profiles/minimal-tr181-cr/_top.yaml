@@ -1,12 +1,11 @@
 # Minimal TR-181 acceptance profile with Connection-Request listener
 # enabled. Daemon-mode trigger.
 #
-# The test pre-picks a free localhost port and passes it via
-# --cr-bind-addr, so the GET URL is known out-of-band. (cpe-sim
-# publishes the URL to the tree at registerCREndpoint time, BEFORE
-# listener.Start() binds the port — see cmd/cpe-sim/main.go:1244 +
-# internal/cwmp/cr/listener.go::URL; tree's ConnectionRequestURL leaf
-# is empty until that publish-after-start ordering is fixed.)
+# Post-fix (cpe-labs-context #20), cpe-sim publishes the bound CR URL
+# into the tree AFTER listener.Start, so the bootstrap Inform's
+# ParameterList carries the correct URL. The acceptance scenario
+# reads that value out of the captured Inform and uses it for the
+# subsequent digest GET — no need to pre-pick a port.
 #
 # throttleWindow: 0s because the test issues exactly one CR; throttle
 # behavior is covered by unit tests.
@@ -36,5 +35,6 @@ informParameters:
     - Device.DeviceInfo.SerialNumber
     - Device.DeviceInfo.SoftwareVersion
     - Device.DeviceInfo.HardwareVersion
+    - Device.ManagementServer.ConnectionRequestURL
   connectionRequest:
     - Device.DeviceInfo.SoftwareVersion
