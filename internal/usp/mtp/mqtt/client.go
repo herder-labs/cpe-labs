@@ -169,22 +169,23 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) onConnect(client paho.Client) {
-	// Subscribe both the exact agent inbox and a multi-level wildcard
-	// so messages addressed with /reply-to= or any other suffix per
-	// the TR-369 NATS-MQTT reply-to convention reach Recv() too.
-	filters := map[string]byte{
-		mtp.TopicAgentInbox(c.opts.EndpointID):         0,
-		mtp.TopicAgentInboxWildcard(c.opts.EndpointID): 0,
-	}
-	token := client.SubscribeMultiple(filters, c.onMessage)
+	// Subscribe to the multi-level wildcard only. Per MQTT 3.1.1
+	// §4.7.1.2 the multi-level wildcard "represents the parent and
+	// any number of child levels", so usp/v1/agent/<eid>/# already
+	// matches the bare usp/v1/agent/<eid>. Subscribing to BOTH (as
+	// this code did originally) made brokers like mochi-mqtt deliver
+	// the same message twice (once per matching filter) — the agent
+	// handled every controller request twice and emitted duplicate
+	// responses. The acceptance suite (#18) catches this; the fix
+	// drops the redundant exact subscription.
+	wildcard := mtp.TopicAgentInboxWildcard(c.opts.EndpointID)
+	token := client.Subscribe(wildcard, 0, c.onMessage)
 	token.Wait()
 	if err := token.Error(); err != nil {
-		c.logger.Warn("usp mqtt subscribe failed", "filters", filters, "err", err)
+		c.logger.Warn("usp mqtt subscribe failed", "filter", wildcard, "err", err)
 		return
 	}
-	c.logger.Info("usp mqtt subscribed",
-		"exact", mtp.TopicAgentInbox(c.opts.EndpointID),
-		"wildcard", mtp.TopicAgentInboxWildcard(c.opts.EndpointID))
+	c.logger.Info("usp mqtt subscribed", "filter", wildcard)
 }
 
 func (c *Client) onMessage(_ paho.Client, msg paho.Message) {

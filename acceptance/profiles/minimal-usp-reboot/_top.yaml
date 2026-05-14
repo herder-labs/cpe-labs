@@ -1,0 +1,23 @@
+# Minimal USP acceptance profile with eventSchedule.rebootDelay set
+# for the Operate(Reboot) scenario.
+#
+# Same as minimal-usp/ (factory-reset variant) plus a 1-second
+# rebootDelay so the simulator defers Event{Boot!} after responding
+# OperateResp. Test wall-clock budget ~3s total (OnBoardRequest +
+# Operate roundtrip + 1s defer + Event{Boot!}).
+#
+# Broker address/port are placeholders the acceptance harness
+# substitutes at fixture time (__BROKER_ADDR__, __BROKER_PORT__).
+
+deviceIdPaths:
+  manufacturer: Device.DeviceInfo.Manufacturer
+  oui:          Device.DeviceInfo.ManufacturerOUI
+  productClass: Device.DeviceInfo.ProductClass
+  serialNumber: Device.DeviceInfo.SerialNumber
+
+fleet:
+  count: 1
+  serialPattern: "{base}"
+
+eventSchedule:
+  rebootDelay: 1s

@@ -1,0 +1,13 @@
+parameters:
+  - path: Device.DeviceInfo.Manufacturer
+    value: "AcceptanceVendor"
+  - path: Device.DeviceInfo.ManufacturerOUI
+    value: "AABBCC"
+  - path: Device.DeviceInfo.ProductClass
+    value: "AcceptanceModel"
+  - path: Device.DeviceInfo.SerialNumber
+    value: "ACCEPTANCE-0001"
+  - path: Device.DeviceInfo.SoftwareVersion
+    value: "1.0.0"
+  - path: Device.DeviceInfo.HardwareVersion
+    value: "rev-A"
