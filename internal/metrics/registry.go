@@ -44,6 +44,11 @@ type Registry struct {
 	// MQTT MTP connection state per broker.
 	MQTTConnState *prometheus.GaugeVec // labels: broker, state
 
+	// MQTT MTP connect failures (auth + other). Per-CPE labels are not
+	// emitted (cardinality blowup at fleet scale) — the EID goes in the
+	// WARN log line. reason is bounded by mqtt.ConnectErrorReason.
+	MQTTConnectFailures *prometheus.CounterVec // labels: reason
+
 	// Process-collector bookkeeping.
 	uptimeMu   sync.Mutex
 	uptimeLast float64
@@ -122,12 +127,17 @@ func NewRegistry() *Registry {
 		Namespace: "cpe_sim", Subsystem: "usp", Name: "mqtt_connection_state",
 		Help: "MQTT broker connection state count per (broker, state).",
 	}, []string{"broker", "state"})
+	r.MQTTConnectFailures = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "cpe_sim", Subsystem: "usp", Name: "mqtt_connect_failures_total",
+		Help: "USP MQTT Connect failures, by coarse reason bucket.",
+	}, []string{"reason"})
 
 	for _, c := range []prometheus.Collector{
 		r.HeapAllocBytes, r.GoroutineCount, r.FDCount, r.UptimeSeconds, r.GCPauseSeconds,
 		r.CPEsByState, r.InformsTotal, r.FaultsTotal, r.USPRequests, r.USPRespRTT,
 		r.BootstrapsTotal, r.PeriodicTicksTotal, r.FailedSessionsTotal,
 		r.ScheduledEventsFired, r.AutonomousNotifiesTotal, r.MQTTConnState,
+		r.MQTTConnectFailures,
 	} {
 		reg.MustRegister(c)
 	}

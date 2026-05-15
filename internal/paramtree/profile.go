@@ -420,9 +420,19 @@ type USPBrokerConfig struct {
 	ProtocolVersion string
 
 	// Username and Password are the broker credentials. Empty defaults
-	// for anonymous (Phase A authentication posture).
+	// for anonymous; set Password explicitly for static-account modes.
+	// When Password is empty and DeviceSecret is set (in this struct or
+	// via the USP_MQTT_DEVICE_SECRET env on the simulator), the agent
+	// derives its password as HMAC-SHA256(DeviceSecret, Username) so a
+	// fleet of N CPEs needs no per-device provisioning.
 	Username string
 	Password string
+
+	// DeviceSecret is the platform-wide HMAC-PSK secret. When set and
+	// Password is empty the agent derives its broker password from
+	// HMAC-SHA256(DeviceSecret, Username); the broker's auth callout
+	// runs the same HMAC and constant-time compares.
+	DeviceSecret string
 
 	// KeepAliveSeconds is the MQTT KEEPALIVE in seconds. Default 60.
 	KeepAliveSeconds int
@@ -585,6 +595,7 @@ type rawUSPBroker struct {
 	ProtocolVersion  string `yaml:"protocolVersion"`
 	Username         string `yaml:"username"`
 	Password         string `yaml:"password"`
+	DeviceSecret     string `yaml:"deviceSecret"`
 	KeepAliveSeconds int    `yaml:"keepAliveSeconds"`
 	CleanSession     *bool  `yaml:"cleanSession"`
 }
@@ -1470,6 +1481,7 @@ func mergeFiles(tree *Tree, files []*loadedFile) (mergedConfig, error) {
 			brokerCfg.ProtocolVersion = strings.TrimSpace(raw.Broker.ProtocolVersion)
 			brokerCfg.Username = raw.Broker.Username
 			brokerCfg.Password = raw.Broker.Password
+			brokerCfg.DeviceSecret = raw.Broker.DeviceSecret
 			brokerCfg.KeepAliveSeconds = raw.Broker.KeepAliveSeconds
 			if raw.Broker.CleanSession != nil {
 				brokerCfg.CleanSession = *raw.Broker.CleanSession

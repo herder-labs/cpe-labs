@@ -13,6 +13,7 @@ import (
 	"github.com/herder-labs/cpe-labs/internal/usp/codec"
 	uspproto "github.com/herder-labs/cpe-labs/internal/usp/codec/proto"
 	"github.com/herder-labs/cpe-labs/internal/usp/mtp"
+	mqttmtp "github.com/herder-labs/cpe-labs/internal/usp/mtp/mqtt"
 	"github.com/herder-labs/cpe-labs/internal/usp/notify"
 )
 
@@ -56,7 +57,7 @@ func Run(ctx context.Context, opts Options) error {
 		dispatch[h.MsgType()] = h
 	}
 
-	if err := opts.Adapter.Connect(ctx); err != nil {
+	if err := connectWithBackoff(ctx, opts, logger); err != nil {
 		return err
 	}
 
@@ -204,6 +205,52 @@ func sendResponse(ctx context.Context, opts Options, reqRecord *uspproto.Record,
 	if err := opts.Adapter.Send(ctx, wire); err != nil {
 		logger.Warn("usp send response failed", "err", err.Error())
 		return
+	}
+}
+
+// connectWithBackoff drives Adapter.Connect with exponential backoff
+// (1s → 60s) until success or ctx cancellation. Every failure is
+// logged at WARN with the EID and bucketed reason, and counted in
+// MQTTConnectFailures. Without this loop a CONNACK rejection from the
+// broker would either return immediately (loud but the agent gives
+// up) or, with paho's SetConnectRetry, silently retry forever — the
+// latter is what historically made HMAC misconfigurations invisible.
+func connectWithBackoff(ctx context.Context, opts Options, logger *slog.Logger) error {
+	const (
+		initialDelay = time.Second
+		maxDelay     = time.Minute
+	)
+	delay := initialDelay
+	for attempt := 1; ; attempt++ {
+		err := opts.Adapter.Connect(ctx)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+		reason := mqttmtp.ConnectErrorReason(err)
+		logger.Warn("usp mqtt connect failed",
+			"eid", opts.AgentEID,
+			"attempt", attempt,
+			"reason", reason,
+			"backoff", delay.String(),
+			"err", err.Error(),
+		)
+		if opts.Metrics != nil && opts.Metrics.MQTTConnectFailures != nil {
+			opts.Metrics.MQTTConnectFailures.WithLabelValues(reason).Inc()
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(delay):
+		}
+		if delay < maxDelay {
+			delay *= 2
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+		}
 	}
 }
 

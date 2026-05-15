@@ -1024,11 +1024,33 @@ func buildCPEStack(cfg cpeconfig.Config, in cpeStackInputs) (*cpeStack, error) {
 		if vErr := identity.Validate(agentEID); vErr != nil {
 			return nil, fmt.Errorf("agent EID %q invalid: %w", agentEID, vErr)
 		}
+		// Resolve broker credentials. Contract with herder's HMAC-PSK
+		// auth callout (per its #524 cross-check):
+		//   ClientID  == Username == AgentEID
+		//   Password  == HMAC-SHA256(deviceSecret, Username) when
+		//               DeviceSecret is set and Password is empty
+		// DeviceSecret comes from the profile first, then the
+		// USP_MQTT_DEVICE_SECRET env. A literal Password in the
+		// profile wins (lab / static-account setups).
+		brokerUsername := prof.USP.Broker.Username
+		if brokerUsername == "" {
+			brokerUsername = agentEID
+		}
+		brokerPassword := prof.USP.Broker.Password
+		if brokerPassword == "" {
+			secret := prof.USP.Broker.DeviceSecret
+			if secret == "" {
+				secret = os.Getenv("USP_MQTT_DEVICE_SECRET")
+			}
+			if secret != "" {
+				brokerPassword = mqttmtp.DerivePassword(secret, brokerUsername)
+			}
+		}
 		adapter, mErr := mqttmtp.New(mqttmtp.Options{
 			BrokerHost:       prof.USP.Broker.Address,
 			BrokerPort:       prof.USP.Broker.Port,
-			Username:         prof.USP.Broker.Username,
-			Password:         prof.USP.Broker.Password,
+			Username:         brokerUsername,
+			Password:         brokerPassword,
 			EndpointID:       agentEID,
 			KeepAlive:        time.Duration(prof.USP.Broker.KeepAliveSeconds) * time.Second,
 			CleanSession:     prof.USP.Broker.CleanSession,

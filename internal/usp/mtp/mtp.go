@@ -1,28 +1,29 @@
 package mtp
 
-import (
-	"context"
-	"net/url"
-)
+import "context"
 
-// TopicControllerInboxBase is the bare agent->controller MQTT topic
-// without the reply-to suffix. NATS-MQTT bridges require the suffix
-// (controllers subscribe to usp.v1.controller.>), so callers should
-// use TopicControllerInbox(agentEID) for publish, not the bare value.
+// TopicControllerInboxBase is the prefix for the agent->controller
+// MQTT publish topic. The agent's TR-369 endpoint ID is appended as
+// the next segment (TopicControllerInbox), giving herder's auth
+// callout and identity cross-check a stable per-device subject.
 const TopicControllerInboxBase = "usp/v1/controller"
 
 // TopicControllerInbox returns the agent->controller publish topic
-// with the TR-369 reply-to convention encoded: the agent's response
-// topic is url-encoded and appended as `/reply-to=<encoded>`. This
-// is how obuspa publishes; the NATS-MQTT bridge converts slashes to
-// dots so the controller's `usp.v1.controller.>` wildcard catches it
-// and recovers the reply-to via the `/reply-to=` qualifier.
+// for the supplied agent EID: usp/v1/controller/<eid>. herder's pub
+// ACL is anchored to usp.v1.controller.<eid> (exact + subtree); the
+// identity cross-check pulls the EID from the subject's first token
+// after usp.v1.controller. and rejects records whose from_id differs.
+//
+// TR-369 R-MQTT.24 permits an optional `/reply-to=<encoded-topic>`
+// suffix; we omit it on the wire because the bare per-EID subject is
+// sufficient for herder's bridge and keeps the published-topic
+// payload narrow. If a future deployment needs sticky reply-to
+// addressing, callers can append the suffix at the call site.
 func TopicControllerInbox(agentEID string) string {
 	if agentEID == "" {
 		return TopicControllerInboxBase
 	}
-	respTopic := TopicAgentInbox(agentEID)
-	return TopicControllerInboxBase + "/reply-to=" + url.QueryEscape(respTopic)
+	return TopicControllerInboxBase + "/" + agentEID
 }
 
 func TopicAgentInbox(eid string) string {
@@ -30,8 +31,8 @@ func TopicAgentInbox(eid string) string {
 }
 
 // TopicAgentInboxWildcard returns the multi-level wildcard the agent
-// subscribes to so it receives messages whose topic carries a
-// /reply-to=... suffix or any other downstream convention.
+// subscribes to so it receives messages whose topic carries any
+// downstream qualifier suffix.
 func TopicAgentInboxWildcard(eid string) string {
 	return TopicAgentInbox(eid) + "/#"
 }
