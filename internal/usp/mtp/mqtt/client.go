@@ -91,15 +91,24 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	brokerURL := fmt.Sprintf("%s://%s:%d", scheme, c.opts.BrokerHost, c.opts.BrokerPort)
 
+	// ClientID is load-bearing: herder's identity cross-check pins
+	// CONNECT.ClientID to the authservice-validated username (==
+	// agent EID == Record.from_id). Without an explicit ClientID
+	// paho generates a random one and the broker rejects every
+	// publish.
 	pahoOpts := paho.NewClientOptions().
 		AddBroker(brokerURL).
 		SetProtocolVersion(pahoProtocolVersion311).
+		SetClientID(c.opts.EndpointID).
 		SetCleanSession(c.opts.CleanSession).
 		SetKeepAlive(c.opts.KeepAlive).
 		SetAutoReconnect(true).
-		SetConnectRetry(true).
-		SetConnectRetryInterval(time.Second).
 		SetMaxReconnectInterval(time.Minute).
+		// SetConnectRetry stays off so CONNACK rejections (e.g. auth
+		// failure) surface as a Connect error instead of paho silently
+		// looping at SetConnectRetryInterval cadence with no log signal.
+		// Bounded retry policy lives one layer up in the session.
+		SetConnectRetry(false).
 		SetConnectTimeout(defaultConnectTimeout).
 		SetOnConnectHandler(c.onConnect).
 		SetConnectionLostHandler(c.onConnectionLost).
